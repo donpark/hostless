@@ -123,9 +123,30 @@ impl RouteTable {
     }
 
     /// Look up a route by hostname (e.g., "myapp.localhost").
+    #[allow(dead_code)]
     pub async fn lookup(&self, hostname: &str) -> Option<AppRoute> {
         let routes = self.routes.read().await;
         routes.get(hostname).cloned()
+    }
+
+    /// Look up a route by hostname with optional wildcard fallback.
+    /// Exact matches always win. When wildcard is enabled, `a.b.localhost`
+    /// may match a registered `b.localhost` route.
+    pub async fn lookup_with_wildcard(&self, hostname: &str, wildcard: bool) -> Option<AppRoute> {
+        let routes = self.routes.read().await;
+
+        if let Some(exact) = routes.get(hostname) {
+            return Some(exact.clone());
+        }
+
+        if !wildcard {
+            return None;
+        }
+
+        routes
+            .iter()
+            .find(|(registered, _)| hostname.ends_with(&format!(".{}", registered)))
+            .map(|(_, route)| route.clone())
     }
 
     /// Remove a route by hostname or app name.
@@ -324,6 +345,31 @@ mod tests {
 
         let found = table.lookup("myapp.localhost").await;
         assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_wildcard_match() {
+        let table = RouteTable::new(11434);
+        table.register("myapp", 4001, None).await.unwrap();
+
+        let found = table
+            .lookup_with_wildcard("tenant.myapp.localhost", true)
+            .await;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().target_port, 4001);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_wildcard_exact_precedence() {
+        let table = RouteTable::new(11434);
+        table.register("myapp", 4001, None).await.unwrap();
+        table.register("tenant.myapp", 4002, None).await.unwrap();
+
+        let found = table
+            .lookup_with_wildcard("tenant.myapp.localhost", true)
+            .await;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().target_port, 4002);
     }
 
     #[test]

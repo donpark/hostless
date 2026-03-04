@@ -27,6 +27,12 @@ pub async fn stream_response(
                 Ok(c) => c,
                 Err(e) => {
                     error!("Error reading upstream stream: {}", e);
+                    let _ = tx
+                        .send(Ok(Bytes::from(
+                            "event: error\ndata: upstream stream interrupted\n\n",
+                        )))
+                        .await;
+                    let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
                     break;
                 }
             };
@@ -85,6 +91,11 @@ pub async fn stream_response(
                     }
                     Err(e) => {
                         error!("Error transforming stream chunk: {}", e);
+                        let _ = tx
+                            .send(Ok(Bytes::from(
+                                "event: error\ndata: invalid stream chunk\n\n",
+                            )))
+                            .await;
                     }
                 }
             }

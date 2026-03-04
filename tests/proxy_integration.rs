@@ -6,7 +6,6 @@
 //! All tests use ephemeral state (no OS keychain, no disk I/O).
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -97,6 +96,19 @@ fn create_test_app(port: u16) -> (Arc<hostless::server::AppState>, axum::Router)
     (state, router)
 }
 
+fn create_test_app_with_wildcard(
+    port: u16,
+    enable_wildcard_routes: bool,
+) -> (Arc<hostless::server::AppState>, axum::Router) {
+    let state = hostless::server::AppState::new_ephemeral_with_options(
+        port,
+        true,
+        enable_wildcard_routes,
+    );
+    let router = hostless::server::create_router(state.clone());
+    (state, router)
+}
+
 /// Send a request through the router and get the response.
 async fn send_request(
     router: &axum::Router,
@@ -113,39 +125,6 @@ async fn body_to_string(resp: axum::response::Response) -> String {
     String::from_utf8(body_bytes.to_vec()).unwrap()
 }
 
-fn create_temp_home_dir() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("hostless-test-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&path).unwrap();
-    path
-}
-
-fn resolve_hostless_bin() -> PathBuf {
-    if let Ok(bin) = std::env::var("CARGO_BIN_EXE_hostless") {
-        return PathBuf::from(bin);
-    }
-
-    let current_exe = std::env::current_exe().unwrap();
-    let target_debug = current_exe
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("test binary should be under target/debug/deps");
-    let fallback = target_debug.join("hostless");
-    assert!(
-        fallback.exists(),
-        "hostless binary not found at {}",
-        fallback.display()
-    );
-    fallback
-}
-
-async fn run_cli(bin: &Path, home: &Path, args: &[&str]) -> std::process::Output {
-    tokio::process::Command::new(bin)
-        .env("HOME", home)
-        .args(args)
-        .output()
-        .await
-        .unwrap()
-}
 
 // ═══════════════════════════════════════════════════════════════════
 //  Dispatch + Reverse Proxy Tests (from proxy.test.ts)
@@ -416,6 +395,80 @@ async fn test_subdomain_cannot_reach_auth() {
     let resp = send_request(&router, req).await;
     // Should NOT reach /auth/token — dispatch intercepts it
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Wildcard routing is disabled by default.
+#[tokio::test]
+async fn test_wildcard_subdomain_disabled_by_default() {
+    let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "wildcard").await;
+
+    let (state, router) = create_test_app(11434);
+    state
+        .route_table
+        .register("myapp", backend_addr.port(), None)
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .uri("/")
+        .header("host", "tenant.myapp.localhost:11434")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Wildcard routing matches parent route when enabled.
+#[tokio::test]
+async fn test_wildcard_subdomain_enabled_matches_parent() {
+    let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "wildcard").await;
+
+    let (state, router) = create_test_app_with_wildcard(11434, true);
+    state
+        .route_table
+        .register("myapp", backend_addr.port(), None)
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .uri("/")
+        .header("host", "tenant.myapp.localhost:11434")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_to_string(resp).await, "wildcard");
+}
+
+/// Exact route has priority over wildcard fallback when enabled.
+#[tokio::test]
+async fn test_wildcard_exact_precedence_when_enabled() {
+    let (wildcard_addr, _wildcard_handle) = spawn_backend(StatusCode::OK, "wildcard").await;
+    let (exact_addr, _exact_handle) = spawn_backend(StatusCode::OK, "exact").await;
+
+    let (state, router) = create_test_app_with_wildcard(11434, true);
+    state
+        .route_table
+        .register("myapp", wildcard_addr.port(), None)
+        .await
+        .unwrap();
+    state
+        .route_table
+        .register("tenant.myapp", exact_addr.port(), None)
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .uri("/")
+        .header("host", "tenant.myapp.localhost:11434")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_to_string(resp).await, "exact");
 }
 
 /// Subdomain traffic cannot reach /v1 LLM proxy endpoints
@@ -1203,49 +1256,3 @@ fn test_hostname_edge_cases() {
     assert!(!hostless::server::dispatch::is_subdomain_host_pub(""));
 }
 
-/// Concurrent `hostless run` invocations on the same daemon port should both succeed,
-/// even when the daemon is initially down.
-#[tokio::test]
-async fn test_run_concurrent_autostart_is_idempotent() {
-    let bin = resolve_hostless_bin();
-    let home = create_temp_home_dir();
-    let daemon_port = find_available_port().unwrap();
-    let daemon_port_arg = daemon_port.to_string();
-    let args_a = [
-        "run",
-        "concurrent-a",
-        "--daemon-port",
-        daemon_port_arg.as_str(),
-        "--",
-        "true",
-    ];
-    let args_b = [
-        "run",
-        "concurrent-b",
-        "--daemon-port",
-        daemon_port_arg.as_str(),
-        "--",
-        "true",
-    ];
-
-    let run_a = run_cli(&bin, &home, &args_a);
-    let run_b = run_cli(&bin, &home, &args_b);
-
-    let (out_a, out_b) = tokio::join!(run_a, run_b);
-
-    let _ = run_cli(&bin, &home, &["stop"]).await;
-    let _ = std::fs::remove_dir_all(&home);
-
-    assert!(
-        out_a.status.success(),
-        "first run failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&out_a.stdout),
-        String::from_utf8_lossy(&out_a.stderr)
-    );
-    assert!(
-        out_b.status.success(),
-        "second run failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&out_b.stdout),
-        String::from_utf8_lossy(&out_b.stderr)
-    );
-}

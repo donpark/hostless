@@ -1,10 +1,15 @@
 # DEVELOPER.md
 
-Guide for local webapp developers integrating with hostless during development.
+Guide for webapp developers integrating with hostless.
 
 ## Who this is for
 
-You are building a local web app and want to call LLM APIs through hostless without putting provider API keys in your app.
+You are building a web app and want either (a) safe BYOK access to LLM APIs without exposing provider keys in app runtime, or (b) per-app local isolation during development via a `.localhost` subdomain.
+
+Primary hostless use-cases:
+
+1. Web apps (local or hosted) that need user-provided LLM API keys (BYOK) without exposing those keys to the app runtime.
+2. Web apps that run locally and want per-app isolation via a unique `.localhost` subdomain.
 
 ## What hostless gives your app
 

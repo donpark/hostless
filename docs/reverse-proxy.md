@@ -69,7 +69,7 @@ Forwards HTTP requests to `127.0.0.1:<target_port>` and pipes the response back.
 - **X-Forwarded headers**: Sets `X-Forwarded-Host`, `X-Forwarded-Proto` (`http`), `X-Forwarded-Port`
 - **Hop-by-hop header stripping**: Removes `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailers`, `Transfer-Encoding`, `Upgrade` (RFC 2616 §13.5.1)
 - **Loop detection**: Tracks `X-Hostless-Hops` header. Returns `508 Loop Detected` when hops ≥ `MAX_HOPS` (5). Increments hop counter on each proxy pass.
-- **Error handling**: Returns `502 Bad Gateway` when the backend is unreachable
+- **Error handling**: Returns branded HTML pages for browser-facing `404`/`502`/`508` proxy errors.
 
 ### WebSocket Support
 
@@ -110,6 +110,7 @@ Maps `.localhost` hostnames to local app ports. Stored in-memory (`HashMap<Strin
 |---|---|
 | `register(name, port, pid)` | Add route. Rejects if hostname taken with alive PID. Replaces if PID is dead. |
 | `lookup(hostname)` | Find route by full hostname |
+| `lookup_with_wildcard(hostname, enabled)` | Exact match first; optional wildcard fallback |
 | `remove(name)` | Remove by app name or full hostname |
 | `list()` | All active routes as `Vec<RouteInfo>` |
 | `set_token(hostname, token)` | Associate a bridge token with a route |
@@ -119,6 +120,16 @@ Maps `.localhost` hostnames to local app ports. Stored in-memory (`HashMap<Strin
 ### Persistence
 
 Routes are persisted to `~/.hostless/routes.json` on every mutation (register/remove/cleanup). Uses `fs2` file locking for safe concurrent access. On startup, `load_from_disk()` restores routes but filters out entries with dead PIDs.
+
+### Wildcard Routing (gated)
+
+When `HOSTLESS_ENABLE_WILDCARD_ROUTES=1` is set at server startup, dispatch may resolve unmatched subdomains by suffix:
+
+- Registered: `myapp.localhost`
+- Request: `tenant.myapp.localhost`
+- Result: forwards to `myapp.localhost` target
+
+Exact hostname matches always take priority over wildcard fallback.
 
 ### Stale Route Cleanup
 

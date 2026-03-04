@@ -6,9 +6,16 @@ This reference reflects the command surface implemented in `src/main.rs`.
 
 ```bash
 hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon]
-hostless run <name> [--port <p>] [--daemon-port <p>] [--providers <csv>] [--models <csv>] [--rate-limit <n>] [--ttl <seconds>] [--no-token] -- <command...>
+hostless proxy <start|stop> ...
+hostless run [<name>] [--infer-name] [--name <name>] [--worktree-prefix] [--app-port <p>] [--daemon-port <p>] [--providers <csv>] [--models <csv>] [--rate-limit <n>] [--ttl <seconds>] [--no-token] -- <command...>
+hostless <name> <command...>
 hostless stop
+hostless list [--daemon-port <p>]
 hostless route <list|add|remove> ...
+hostless alias <list|add|remove> ...
+hostless alias <name> <port> [--daemon-port <p>]
+hostless alias --remove <name> [--daemon-port <p>]
+hostless hosts <sync|clean>
 hostless trust
 hostless keys <add|list|remove|migrate> ...
 hostless origins <add|list|remove> ...
@@ -33,19 +40,32 @@ hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon]
 ## run (portless-clone)
 
 ```bash
-hostless run <name> [options] -- <command...>
+hostless run [<name>] [options] -- <command...>
+hostless <name> <command...>
 ```
 
 | Option | Description |
 |---|---|
-| `<name>` | App name used as `<name>.localhost` |
-| `--port <port>` | Override assigned app port |
+| `<name>` | App name used as `<name>.localhost` (optional with `--infer-name`) |
+| `--infer-name` | Infer app name from package.json, git root, or directory name |
+| `--name <name>` | Explicit name override |
+| `--worktree-prefix` | Prefix app name with current git worktree branch segment |
+| `--app-port <port>` | Override assigned app port (`--port` remains accepted as alias) |
 | `--daemon-port <port>` | Hostless daemon port (default: `11434`) |
 | `--providers <csv>` | Restrict token to providers (`openai,anthropic,google`) |
 | `--models <csv>` | Restrict token to model globs |
 | `--rate-limit <n>` | Requests/hour limit for auto-token |
 | `--ttl <seconds>` | Token TTL (default: `86400`) |
 | `--no-token` | Skip auto-token provisioning |
+
+Environment:
+
+| Variable | Description |
+|---|---|
+| `HOSTLESS_APP_PORT` | Default app port override for `hostless run` |
+| `HOSTLESS_ENABLE_WILDCARD_ROUTES` | Enable wildcard subdomain routing (`tenant.app.localhost` -> `app.localhost`) |
+
+The top-level shorthand `hostless <name> <command...>` is portless-compatible and maps to `hostless run <name> -- <command...>`.
 
 ## stop
 
@@ -54,6 +74,24 @@ hostless stop
 ```
 
 Stops the daemon process tracked in `~/.hostless/hostless.pid`.
+
+## proxy (portless-compatible)
+
+```bash
+hostless proxy start [--port 11434] [--https] [--verbose] [--dev-mode] [--foreground]
+hostless proxy stop
+```
+
+- `proxy start` defaults to daemon/background mode unless `--foreground` is used.
+- `--https` maps to hostless TLS mode.
+
+## list (portless-compatible)
+
+```bash
+hostless list [--daemon-port <port>]
+```
+
+Equivalent to `hostless route list`.
 
 ## route
 
@@ -64,6 +102,29 @@ hostless route remove <name> [--daemon-port 11434]
 ```
 
 Use these commands to manage `.localhost` route mappings without process wrapping.
+
+## alias
+
+```bash
+hostless alias list [--daemon-port 11434]
+hostless alias add <name> <port> [--daemon-port 11434]
+hostless alias remove <name> [--daemon-port 11434]
+hostless alias <name> <port> [--daemon-port 11434]
+hostless alias --remove <name> [--daemon-port 11434]
+```
+
+Static aliases are loopback-only route registrations (`127.0.0.1:<port>`) and do not auto-provision bridge tokens.
+The positional and `--remove` forms are portless-compatible shorthands.
+
+## hosts
+
+```bash
+hostless hosts sync
+hostless hosts clean
+```
+
+`hosts sync` writes current persisted route hostnames into a managed `/etc/hosts` block.
+`hosts clean` removes only the managed hostless block. Run these with sufficient permissions (typically via `sudo`).
 
 ## trust
 

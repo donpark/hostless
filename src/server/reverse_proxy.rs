@@ -11,6 +11,7 @@ use hyper_util::rt::TokioExecutor;
 use tracing::{debug, error, warn};
 
 use super::AppState;
+use super::pages;
 
 /// Maximum number of proxy hops before returning 508 Loop Detected.
 const MAX_HOPS: u32 = 5;
@@ -47,11 +48,17 @@ pub async fn reverse_proxy(
 
     if hops >= MAX_HOPS {
         warn!(hops = hops, "Loop detected in reverse proxy");
-        return (
+        let html = pages::render_error_page(
             StatusCode::LOOP_DETECTED,
-            "508 Loop Detected: too many proxy hops",
-        )
-            .into_response();
+            "Loop Detected",
+            "This request passed through hostless too many times. This usually means an app proxy loop.",
+            Some("Fix: configure your frontend proxy with changeOrigin: true."),
+        );
+        return Response::builder()
+            .status(StatusCode::LOOP_DETECTED)
+            .header("content-type", "text/html; charset=utf-8")
+            .body(Body::from(html))
+            .unwrap_or_else(|_| StatusCode::LOOP_DETECTED.into_response());
     }
 
     // --- Check for WebSocket upgrade ---
@@ -155,11 +162,17 @@ pub async fn reverse_proxy(
                 error = %e,
                 "Failed to connect to upstream app"
             );
-            (
+            let html = pages::render_error_page(
                 StatusCode::BAD_GATEWAY,
-                format!("502 Bad Gateway: could not connect to app on port {}", target_port),
-            )
-                .into_response()
+                "Bad Gateway",
+                &format!("Could not connect to app on port {}.", target_port),
+                None,
+            );
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
         }
     }
 }
@@ -182,11 +195,17 @@ async fn handle_websocket_upgrade(
                 error = %e,
                 "WebSocket upgrade: failed to connect to upstream"
             );
-            return (
+            let html = pages::render_error_page(
                 StatusCode::BAD_GATEWAY,
-                "502 Bad Gateway: could not connect to upstream for WebSocket",
-            )
-                .into_response();
+                "Bad Gateway",
+                "Could not connect to upstream for WebSocket upgrade.",
+                None,
+            );
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(Body::from(html))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
         }
     };
 

@@ -1,6 +1,6 @@
 [package]
 name = "hostless"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Local AI proxy that manages LLM API keys and injects them into forwarded requests"
 license = "MIT"
@@ -22,6 +22,11 @@ required-features = ["internal-testing"]
 [[test]]
 name = "openai_e2e"
 path = "tests/openai_e2e.rs"
+required-features = ["internal-testing"]
+
+[[test]]
+name = "cli_integration"
+path = "tests/cli_integration.rs"
 required-features = ["internal-testing"]
 
 [dependencies]

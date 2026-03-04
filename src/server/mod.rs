@@ -1,5 +1,6 @@
 pub mod cors;
 pub mod dispatch;
+pub mod pages;
 pub mod reverse_proxy;
 pub mod route_table;
 pub mod routes;
@@ -31,9 +32,17 @@ pub struct AppState {
     /// When true, bare localhost/127.0.0.1 and empty-origin requests bypass auth.
     /// When false (default), all requests must present a valid bridge token.
     pub dev_mode: bool,
+    /// When true, allow wildcard subdomain routing: tenant.app.localhost -> app.localhost.
+    pub enable_wildcard_routes: bool,
 }
 
 impl AppState {
+    fn env_flag_true(name: &str) -> bool {
+        std::env::var(name)
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    }
+
     pub async fn new(port: u16, dev_mode: bool) -> Result<Arc<Self>> {
         let vault = VaultStore::open().await?;
         let config = AppConfig::load()?;
@@ -54,6 +63,7 @@ impl AppState {
             port,
             admin_token,
             dev_mode,
+            enable_wildcard_routes: Self::env_flag_true("HOSTLESS_ENABLE_WILDCARD_ROUTES"),
         });
 
         // Load persisted routes from disk (stale PID routes are filtered out)
@@ -69,6 +79,15 @@ impl AppState {
     /// Use this in tests to avoid keychain prompts.
     #[allow(dead_code)]
     pub fn new_ephemeral(port: u16, dev_mode: bool) -> Arc<Self> {
+        Self::new_ephemeral_with_options(port, dev_mode, false)
+    }
+
+    #[allow(dead_code)]
+    pub fn new_ephemeral_with_options(
+        port: u16,
+        dev_mode: bool,
+        enable_wildcard_routes: bool,
+    ) -> Arc<Self> {
         let vault = VaultStore::open_ephemeral();
         let config = AppConfig::default();
         let token_manager = auth::bridge_token::BridgeTokenManager::new();
@@ -88,6 +107,7 @@ impl AppState {
             port,
             admin_token: "test-admin-token".to_string(),
             dev_mode,
+            enable_wildcard_routes,
         })
     }
 }

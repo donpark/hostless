@@ -25,9 +25,9 @@ $ hostless run myapp -- npm run dev
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | `String` | required | App name (becomes `<name>.localhost`) |
+| `name` | `String` | optional | App name (becomes `<name>.localhost`) |
 | `command` | `String` | required | Shell command to execute |
-| `port` | `Option<u16>` | random 4000-4999 | Override target port |
+| `port` | `Option<u16>` | random 4000-4999 | Override target port (`--app-port` / `HOSTLESS_APP_PORT`) |
 | `daemon_port` | `u16` | 11434 | Hostless server port |
 | `auto_token` | `bool` | true | Whether to provision a bridge token |
 | `allowed_providers` | `Option<Vec<String>>` | None (all) | Provider scope for token |
@@ -52,8 +52,12 @@ $ hostless run myapp -- npm run dev
 | `nuxt` | `--port <port> --host 127.0.0.1` |
 | `remix` | `--port <port> --host 127.0.0.1` |
 | `next` | `-p <port> -H 127.0.0.1` |
+| `react-native` | `--port <port> --host 127.0.0.1` |
+| `expo` | `--port <port> --host localhost` |
 | `npm`/`yarn`/`pnpm` + vite/astro/nuxt in command | `-- --port <port> --host 127.0.0.1` |
 | Unknown (node, python, etc.) | No injection |
+
+For wrapper commands containing `expo`, host injection uses `localhost`.
 
 **Skip conditions**: If the command already contains `--port` or `-p `, no flags are injected.
 
@@ -69,6 +73,7 @@ $ hostless run myapp -- npm run dev
 | `HOSTLESS_URL` | `http://<name>.localhost:<daemon_port>` | The app's public URL |
 | `HOSTLESS_API` | `http://localhost:<daemon_port>` | Hostless management API |
 | `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` | `.localhost` | Allows Vite to serve `.localhost` subdomains |
+| `HOSTLESS_APP_PORT` | `<port>` | Optional app-port override default |
 
 Also prepends `node_modules/.bin` to `PATH` if it exists in CWD.
 
@@ -106,6 +111,14 @@ Also prepends `node_modules/.bin` to `PATH` if it exists in CWD.
 ### `HOSTLESS=0` Bypass
 
 When `HOSTLESS=0` is set in the environment, `hostless run` executes the command directly without any wrapping. This allows nested invocations to opt out.
+
+## Name Inference & Worktrees
+
+`hostless run` supports optional name automation:
+
+- `--infer-name`: infer from `package.json` name, then git root directory, then current directory.
+- `--name <name>`: explicit name override.
+- `--worktree-prefix`: prepend inferred/explicit name with current git worktree branch segment (non-main/master).
 
 ## File Layout on Disk
 

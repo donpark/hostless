@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
@@ -77,6 +78,156 @@ pub fn find_available_port() -> Result<u16> {
     Ok(port)
 }
 
+/// Sanitize a string for use as a `.localhost` hostname label.
+/// Keeps lowercase alphanumeric and hyphens, collapses repeated hyphens,
+/// and trims leading/trailing hyphens.
+pub fn sanitize_for_hostname(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut previous_was_hyphen = false;
+
+    for ch in name.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() {
+            out.push(lower);
+            previous_was_hyphen = false;
+        } else if !previous_was_hyphen {
+            out.push('-');
+            previous_was_hyphen = true;
+        }
+    }
+
+    out.trim_matches('-').to_string()
+}
+
+/// Infer a project name from package.json, git root, or directory basename.
+pub fn infer_project_name(start_dir: Option<&Path>) -> Result<String> {
+    let cwd = match start_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_dir().context("Failed to resolve current directory")?,
+    };
+
+    if let Some(pkg_name) = find_package_json_name(&cwd) {
+        let sanitized = sanitize_for_hostname(&pkg_name);
+        if !sanitized.is_empty() {
+            return Ok(sanitized);
+        }
+    }
+
+    if let Some(git_root) = find_git_root(&cwd) {
+        let sanitized = sanitize_for_hostname(
+            git_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default(),
+        );
+        if !sanitized.is_empty() {
+            return Ok(sanitized);
+        }
+    }
+
+    let fallback = sanitize_for_hostname(
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+    );
+    if fallback.is_empty() {
+        anyhow::bail!("Could not infer a valid app name from current directory")
+    }
+    Ok(fallback)
+}
+
+/// Detect an optional worktree prefix from the current git branch.
+/// Returns None for single-worktree repos and default branches.
+pub fn detect_worktree_prefix(start_dir: Option<&Path>) -> Option<String> {
+    let cwd = start_dir
+        .map(|p| p.to_path_buf())
+        .or_else(|| std::env::current_dir().ok())?;
+
+    let list_output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&cwd)
+        .output()
+        .ok()?;
+    if !list_output.status.success() {
+        return None;
+    }
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let worktree_count = list_stdout
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .count();
+    if worktree_count <= 1 {
+        return None;
+    }
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&cwd)
+        .output()
+        .ok()?;
+    if !branch_output.status.success() {
+        return None;
+    }
+
+    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+    if branch == "HEAD" || branch == "main" || branch == "master" {
+        return None;
+    }
+
+    let segment = branch.split('/').next_back().unwrap_or_default();
+    let sanitized = sanitize_for_hostname(segment);
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+fn find_package_json_name(start_dir: &Path) -> Option<String> {
+    let mut dir = start_dir.to_path_buf();
+    loop {
+        let package_path = dir.join("package.json");
+        if let Ok(raw) = std::fs::read_to_string(&package_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(name) = value.get("name").and_then(|v| v.as_str()) {
+                    let stripped = name
+                        .split('/')
+                        .next_back()
+                        .unwrap_or(name)
+                        .to_string();
+                    if !stripped.is_empty() {
+                        return Some(stripped);
+                    }
+                }
+            }
+        }
+
+        let parent = dir.parent()?.to_path_buf();
+        if parent == dir {
+            return None;
+        }
+        dir = parent;
+    }
+}
+
+fn find_git_root(start_dir: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(start_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(root))
+    }
+}
+
 /// Detect the framework from the command and inject appropriate flags.
 ///
 /// Returns the modified command with --port/--host flags appended.
@@ -97,8 +248,11 @@ pub fn inject_framework_flags(command: &str, port: u16) -> String {
     }
 
     match base_name {
-        "vite" | "astro" | "react-router" | "ng" | "nuxt" | "remix" => {
+        "vite" | "astro" | "react-router" | "ng" | "nuxt" | "remix" | "react-native" => {
             format!("{} --port {} --host 127.0.0.1", command, port)
+        }
+        "expo" => {
+            format!("{} --port {} --host localhost", command, port)
         }
         "next" => {
             format!("{} -p {} -H 127.0.0.1", command, port)
@@ -108,10 +262,17 @@ pub fn inject_framework_flags(command: &str, port: u16) -> String {
             if cmd_lower.contains("vite")
                 || cmd_lower.contains("astro")
                 || cmd_lower.contains("nuxt")
+                || cmd_lower.contains("expo")
+                || cmd_lower.contains("react-native")
             {
                 // For npm run dev with vite/astro, flags go after --
                 if base_name == "npm" || base_name == "yarn" || base_name == "pnpm" {
-                    format!("{} -- --port {} --host 127.0.0.1", command, port)
+                    let host = if cmd_lower.contains("expo") {
+                        "localhost"
+                    } else {
+                        "127.0.0.1"
+                    };
+                    format!("{} -- --port {} --host {}", command, port, host)
                 } else {
                     command.to_string()
                 }
@@ -501,6 +662,32 @@ pub async fn spawn_and_manage(config: SpawnConfig) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{}-{}", prefix, rand::random::<u32>()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) -> bool {
+        Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 
     #[test]
     fn test_inject_framework_flags_vite() {
@@ -524,6 +711,24 @@ mod tests {
     fn test_inject_framework_flags_unknown() {
         let cmd = inject_framework_flags("python -m http.server", 4001);
         assert_eq!(cmd, "python -m http.server"); // Don't inject
+    }
+
+    #[test]
+    fn test_inject_framework_flags_expo() {
+        let cmd = inject_framework_flags("expo start", 4001);
+        assert_eq!(cmd, "expo start --port 4001 --host localhost");
+    }
+
+    #[test]
+    fn test_inject_framework_flags_react_native() {
+        let cmd = inject_framework_flags("react-native start", 4001);
+        assert_eq!(cmd, "react-native start --port 4001 --host 127.0.0.1");
+    }
+
+    #[test]
+    fn test_inject_framework_flags_npm_expo_script() {
+        let cmd = inject_framework_flags("npm run expo", 4001);
+        assert_eq!(cmd, "npm run expo -- --port 4001 --host localhost");
     }
 
     #[test]
@@ -557,5 +762,127 @@ mod tests {
     fn test_build_child_env_no_token() {
         let env = build_child_env(4001, None, 11434, "myapp");
         assert!(env.get("HOSTLESS_TOKEN").is_none());
+    }
+
+    #[test]
+    fn test_sanitize_for_hostname() {
+        assert_eq!(sanitize_for_hostname("My_App"), "my-app");
+        assert_eq!(sanitize_for_hostname("feature/auth"), "feature-auth");
+        assert_eq!(sanitize_for_hostname("---@"), "");
+        assert_eq!(sanitize_for_hostname("my--app"), "my-app");
+        assert_eq!(sanitize_for_hostname("-myapp-"), "myapp");
+        assert_eq!(sanitize_for_hostname("my-app-123"), "my-app-123");
+    }
+
+    #[test]
+    fn test_infer_project_name_from_package_json() {
+        let tmp = temp_dir("hostless-test");
+        fs::write(tmp.join("package.json"), r#"{"name":"@org/My_App"}"#).unwrap();
+
+        let inferred = infer_project_name(Some(&tmp)).unwrap();
+        assert_eq!(inferred, "my-app");
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_infer_project_name_fallback_to_directory() {
+        let tmp = temp_dir("hostless-fallback");
+
+        let inferred = infer_project_name(Some(&tmp)).unwrap();
+        assert!(inferred.starts_with("hostless-fallback"));
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_infer_project_name_walks_up_to_parent_package_json() {
+        let tmp = temp_dir("hostless-parent-pkg");
+        fs::write(tmp.join("package.json"), r#"{"name":"parent-app"}"#).unwrap();
+        let nested = tmp.join("src").join("components");
+        fs::create_dir_all(&nested).unwrap();
+
+        let inferred = infer_project_name(Some(&nested)).unwrap();
+        assert_eq!(inferred, "parent-app");
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_infer_project_name_skips_invalid_package_name() {
+        let tmp = temp_dir("hostless-invalid-pkg");
+        fs::write(tmp.join("package.json"), r#"{"name":"@@@"}"#).unwrap();
+
+        let inferred = infer_project_name(Some(&tmp)).unwrap();
+        assert_ne!(inferred, "");
+        assert_ne!(inferred, "@@@");
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_detect_worktree_prefix_returns_none_without_git() {
+        let tmp = temp_dir("hostless-no-git");
+        let prefix = detect_worktree_prefix(Some(&tmp));
+        assert!(prefix.is_none());
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_detect_worktree_prefix_linked_worktree_non_default_branch() {
+        if !git_available() {
+            return;
+        }
+
+        let repo = temp_dir("hostless-worktree-repo");
+        if !run_git(&repo, &["init"]) {
+            let _ = fs::remove_dir_all(repo);
+            return;
+        }
+        run_git(&repo, &["branch", "-M", "main"]);
+        fs::write(repo.join("README.md"), "test").unwrap();
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "init"]);
+        run_git(&repo, &["branch", "feature/auth"]);
+
+        let wt = temp_dir("hostless-worktree-linked");
+        if !run_git(&repo, &["worktree", "add", wt.to_string_lossy().as_ref(), "feature/auth"]) {
+            let _ = fs::remove_dir_all(repo);
+            let _ = fs::remove_dir_all(wt);
+            return;
+        }
+
+        let prefix = detect_worktree_prefix(Some(&wt));
+        assert_eq!(prefix.as_deref(), Some("auth"));
+
+        let _ = fs::remove_dir_all(repo);
+        let _ = fs::remove_dir_all(wt);
+    }
+
+    #[test]
+    fn test_detect_worktree_prefix_main_checkout_none() {
+        if !git_available() {
+            return;
+        }
+
+        let repo = temp_dir("hostless-main-worktree-repo");
+        if !run_git(&repo, &["init"]) {
+            let _ = fs::remove_dir_all(repo);
+            return;
+        }
+        run_git(&repo, &["branch", "-M", "main"]);
+        fs::write(repo.join("README.md"), "test").unwrap();
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["-c", "user.name=Test", "-c", "user.email=t@t", "commit", "-m", "init"]);
+        run_git(&repo, &["branch", "feature-auth"]);
+
+        let wt = temp_dir("hostless-main-worktree-linked");
+        run_git(&repo, &["worktree", "add", wt.to_string_lossy().as_ref(), "feature-auth"]);
+
+        let prefix = detect_worktree_prefix(Some(&repo));
+        assert!(prefix.is_none());
+
+        let _ = fs::remove_dir_all(repo);
+        let _ = fs::remove_dir_all(wt);
     }
 }

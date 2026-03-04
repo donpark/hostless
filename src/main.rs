@@ -1,11 +1,14 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tracing::info;
 
 mod auth;
 mod config;
+mod hosts;
 mod process;
 mod providers;
 mod server;
@@ -53,15 +56,28 @@ enum Commands {
     /// Run a command through the hostless proxy (assigns <name>.localhost subdomain)
     Run {
         /// App name (becomes <name>.localhost)
-        name: String,
+        /// If omitted, use --infer-name or --name.
+        name: Option<String>,
+
+        /// Infer app name from package.json, git root, or current directory
+        #[arg(long)]
+        infer_name: bool,
+
+        /// Optional explicit app name override (useful with reserved words)
+        #[arg(long = "name")]
+        name_override: Option<String>,
+
+        /// Prefix inferred/explicit app name with git worktree branch segment
+        #[arg(long)]
+        worktree_prefix: bool,
 
         /// Command to run (use -- to separate from hostless args)
-        #[arg(trailing_var_arg = true, required = true)]
+        #[arg(trailing_var_arg = true, num_args = 1..)]
         command: Vec<String>,
 
         /// Override the port assigned to the app
-        #[arg(long)]
-        port: Option<u16>,
+        #[arg(long = "app-port", alias = "port")]
+        app_port: Option<u16>,
 
         /// Hostless daemon port (default: auto-detect or 11434)
         #[arg(long)]
@@ -91,14 +107,53 @@ enum Commands {
     /// Stop the hostless daemon
     Stop,
 
+    /// Portless-compatible proxy controls
+    Proxy {
+        #[command(subcommand)]
+        action: ProxyAction,
+    },
+
+    /// Portless-compatible route listing alias
+    List {
+        /// Hostless daemon port override
+        #[arg(long)]
+        daemon_port: Option<u16>,
+    },
+
     /// Manage app routes
     Route {
         #[command(subcommand)]
         action: RouteAction,
     },
 
+    /// Manage static loopback aliases (for services not spawned by hostless)
+    Alias {
+        #[command(subcommand)]
+        action: Option<AliasAction>,
+
+        /// Portless-compatible remove form: hostless alias --remove <name>
+        #[arg(long)]
+        remove: Option<String>,
+
+        /// Portless-compatible add form: hostless alias <name> <port>
+        name: Option<String>,
+
+        /// Portless-compatible add form: hostless alias <name> <port>
+        port: Option<u16>,
+
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+
     /// Trust the hostless CA certificate in the system store
     Trust,
+
+    /// Manage /etc/hosts entries for current hostless routes
+    Hosts {
+        #[command(subcommand)]
+        action: HostsAction,
+    },
 
     /// Manage API keys
     Keys {
@@ -124,6 +179,38 @@ enum Commands {
         action: TokenAction,
     },
 
+    /// Portless-compatible shorthand: hostless <name> <command...>
+    #[command(external_subcommand)]
+    External(Vec<String>),
+
+}
+
+#[derive(Subcommand)]
+enum ProxyAction {
+    /// Start the proxy daemon (portless-compatible)
+    Start {
+        /// Port to listen on
+        #[arg(short, long, default_value = "11434")]
+        port: u16,
+
+        /// Enable TLS with auto-generated local certificates
+        #[arg(long = "https")]
+        https: bool,
+
+        /// Verbose logging
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Dev mode: allow unauthenticated bare localhost/no-origin requests
+        #[arg(long)]
+        dev_mode: bool,
+
+        /// Run in foreground (default is daemon/background)
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Stop the proxy daemon (portless-compatible)
+    Stop,
 }
 
 #[derive(Subcommand)]
@@ -188,6 +275,42 @@ enum RouteAction {
         #[arg(long, default_value = "11434")]
         daemon_port: u16,
     },
+}
+
+#[derive(Subcommand)]
+enum AliasAction {
+    /// List static aliases (same output as route list)
+    List {
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+    /// Add a static alias to a loopback port
+    Add {
+        /// Alias name (becomes <name>.localhost)
+        name: String,
+        /// Target local port on 127.0.0.1
+        port: u16,
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+    /// Remove a static alias
+    Remove {
+        /// Alias name or hostname
+        name: String,
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostsAction {
+    /// Sync managed hostless entries into /etc/hosts
+    Sync,
+    /// Remove managed hostless entries from /etc/hosts
+    Clean,
 }
 
 #[derive(Subcommand)]
@@ -290,8 +413,11 @@ async fn main() -> Result<()> {
 
         Commands::Run {
             name,
+            infer_name,
+            name_override,
+            worktree_prefix,
             command,
-            port,
+            app_port,
             daemon_port,
             providers,
             models,
@@ -299,50 +425,21 @@ async fn main() -> Result<()> {
             ttl,
             no_token,
         } => {
-            init_tracing(false);
-
-            // Check HOSTLESS=0 bypass
-            if std::env::var("HOSTLESS").map(|v| v == "0").unwrap_or(false) {
-                println!("HOSTLESS=0 set, running command directly without proxy");
-                let cmd_str = command.join(" ");
-                let status = std::process::Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(&cmd_str)
-                    .status()
-                    .context("Failed to run command")?;
-                std::process::exit(status.code().unwrap_or(1));
-            }
-
-            // Determine daemon port (explicit --daemon-port wins; else auto-detect from file; else default)
-            let effective_daemon_port = daemon_port
-                .or_else(process::manager::read_daemon_port)
-                .unwrap_or(11434);
-
-            ensure_daemon_ready_for_run(&name, effective_daemon_port).await?;
-
-            let cmd_str = command.join(" ");
-
-            info!(
-                event = "launch-wrapped-app",
-                app = name.as_str(),
-                daemon_port = effective_daemon_port,
-                "Launching wrapped app"
-            );
-
-            let config = process::manager::SpawnConfig {
+            run_wrapped_command(
                 name,
-                command: cmd_str,
-                port,
-                daemon_port: effective_daemon_port,
-                auto_token: !no_token,
-                allowed_providers: providers,
-                allowed_models: models,
+                infer_name,
+                name_override,
+                worktree_prefix,
+                command,
+                app_port,
+                daemon_port,
+                providers,
+                models,
                 rate_limit,
                 ttl,
-            };
-
-            let exit_code = process::manager::spawn_and_manage(config).await?;
-            std::process::exit(exit_code);
+                no_token,
+            )
+            .await?;
         }
 
         Commands::Stop => {
@@ -380,12 +477,64 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::Proxy { action } => match action {
+            ProxyAction::Start {
+                port,
+                https,
+                verbose,
+                dev_mode,
+                foreground,
+            } => {
+                // Portless semantics default to daemon mode unless --foreground is set.
+                handle_serve(port, https, verbose, dev_mode, !foreground, false).await?;
+            }
+            ProxyAction::Stop => {
+                handle_stop()?;
+            }
+        },
+
+        Commands::List { daemon_port } => {
+            let effective_port = daemon_port
+                .or_else(process::manager::read_daemon_port)
+                .unwrap_or(11434);
+            print_routes(effective_port).await?;
+        }
+
         Commands::Route { action } => {
             handle_route(action).await?;
         }
 
+        Commands::Alias {
+            action,
+            remove,
+            name,
+            port,
+            daemon_port,
+        } => {
+            if let Some(action) = action {
+                handle_alias(action).await?;
+            } else if let Some(name) = remove {
+                handle_alias(AliasAction::Remove { name, daemon_port }).await?;
+            } else if let (Some(name), Some(port)) = (name, port) {
+                handle_alias(AliasAction::Add {
+                    name,
+                    port,
+                    daemon_port,
+                })
+                .await?;
+            } else {
+                anyhow::bail!(
+                    "Invalid alias usage. Use one of:\n  hostless alias list\n  hostless alias add <name> <port>\n  hostless alias remove <name>\n  hostless alias <name> <port>\n  hostless alias --remove <name>"
+                );
+            }
+        }
+
         Commands::Trust => {
             handle_trust()?;
+        }
+
+        Commands::Hosts { action } => {
+            handle_hosts(action)?;
         }
 
         Commands::Keys { action } => {
@@ -408,6 +557,249 @@ async fn main() -> Result<()> {
             handle_token(action).await?;
         }
 
+        Commands::External(args) => {
+            if args.len() < 2 {
+                anyhow::bail!(
+                    "Unknown command '{}'.\nFor app shorthand use: hostless <name> <command...>",
+                    args.first().cloned().unwrap_or_default()
+                );
+            }
+            let name = Some(args[0].clone());
+            let command = args[1..].to_vec();
+            run_wrapped_command(
+                name,
+                false,
+                None,
+                false,
+                command,
+                None,
+                None,
+                None,
+                None,
+                None,
+                86400,
+                false,
+            )
+            .await?;
+        }
+
+    }
+
+    Ok(())
+}
+
+async fn run_wrapped_command(
+    name: Option<String>,
+    infer_name: bool,
+    name_override: Option<String>,
+    worktree_prefix: bool,
+    command: Vec<String>,
+    app_port: Option<u16>,
+    daemon_port: Option<u16>,
+    providers: Option<Vec<String>>,
+    models: Option<Vec<String>>,
+    rate_limit: Option<u64>,
+    ttl: u64,
+    no_token: bool,
+) -> Result<()> {
+    init_tracing(false);
+
+    if command.is_empty() {
+        anyhow::bail!("No command provided. Usage: hostless run <name> -- <command>");
+    }
+
+    // Check HOSTLESS=0 bypass
+    if std::env::var("HOSTLESS").map(|v| v == "0").unwrap_or(false) {
+        println!("HOSTLESS=0 set, running command directly without proxy");
+        let cmd_str = command.join(" ");
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&cmd_str)
+            .status()
+            .context("Failed to run command")?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    let mut effective_name = if let Some(name) = name_override {
+        name
+    } else if let Some(name) = name {
+        name
+    } else if infer_name {
+        process::manager::infer_project_name(None)?
+    } else {
+        anyhow::bail!(
+            "No app name provided. Use 'hostless run <name> -- <cmd>' or '--infer-name'."
+        );
+    };
+
+    effective_name = process::manager::sanitize_for_hostname(&effective_name);
+    if effective_name.is_empty() {
+        anyhow::bail!("App name is invalid after hostname sanitization");
+    }
+
+    if worktree_prefix {
+        if let Some(prefix) = process::manager::detect_worktree_prefix(None) {
+            effective_name = format!("{}-{}", prefix, effective_name);
+        }
+    }
+
+    // Determine daemon port (explicit --daemon-port wins; else auto-detect from file; else default)
+    let effective_daemon_port = daemon_port
+        .or_else(process::manager::read_daemon_port)
+        .unwrap_or(11434);
+
+    ensure_daemon_ready_for_run(&effective_name, effective_daemon_port).await?;
+
+    let cmd_str = command.join(" ");
+
+    let env_app_port = match std::env::var("HOSTLESS_APP_PORT") {
+        Ok(raw) => {
+            let parsed = raw.parse::<u16>().with_context(|| {
+                format!("Invalid HOSTLESS_APP_PORT value '{}': expected 1-65535", raw)
+            })?;
+            Some(parsed)
+        }
+        Err(_) => None,
+    };
+
+    let effective_app_port = app_port.or(env_app_port);
+
+    info!(
+        event = "launch-wrapped-app",
+        app = effective_name.as_str(),
+        daemon_port = effective_daemon_port,
+        "Launching wrapped app"
+    );
+
+    let config = process::manager::SpawnConfig {
+        name: effective_name,
+        command: cmd_str,
+        port: effective_app_port,
+        daemon_port: effective_daemon_port,
+        auto_token: !no_token,
+        allowed_providers: providers,
+        allowed_models: models,
+        rate_limit,
+        ttl,
+    };
+
+    let exit_code = process::manager::spawn_and_manage(config).await?;
+    std::process::exit(exit_code);
+}
+
+async fn handle_serve(
+    port: u16,
+    tls: bool,
+    verbose: bool,
+    dev_mode: bool,
+    daemon: bool,
+    daemonized: bool,
+) -> Result<()> {
+    init_tracing(verbose);
+    if dev_mode {
+        info!("⚠️  Dev mode enabled: bare localhost and no-origin requests bypass auth");
+    }
+
+    process::manager::write_daemon_port(port).ok();
+    process::manager::write_daemon_pid(std::process::id()).ok();
+
+    if daemon && !daemonized {
+        println!("Starting hostless daemon on port {}...", port);
+        process::manager::start_daemon_process_with_options(port, tls, dev_mode, verbose)?;
+        return Ok(());
+    }
+
+    let app_state = server::AppState::new(port, dev_mode).await?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    let _cleanup_guard = DaemonCleanupGuard;
+
+    if tls {
+        info!("Starting Hostless proxy with TLS on https://localhost:{}", port);
+        tls::serve_tls(app_state, addr).await?;
+    } else {
+        info!("Starting Hostless proxy on http://localhost:{}", port);
+        let app = server::create_router(app_state);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        info!("Listening on {}", addr);
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn handle_stop() -> Result<()> {
+    match process::manager::read_daemon_pid() {
+        Some(pid) => {
+            use nix::sys::signal::{self, Signal};
+            use nix::unistd::Pid;
+
+            println!("Stopping hostless daemon (PID {})...", pid);
+            match signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                Ok(_) => {
+                    for _ in 0..50 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        if signal::kill(Pid::from_raw(pid as i32), None).is_err() {
+                            break;
+                        }
+                    }
+                    process::manager::cleanup_daemon_files();
+                    println!("✓ Daemon stopped");
+                }
+                Err(nix::errno::Errno::ESRCH) => {
+                    process::manager::cleanup_daemon_files();
+                    println!("Daemon was not running (stale PID file cleaned up)");
+                }
+                Err(e) => {
+                    anyhow::bail!("Failed to stop daemon: {}", e);
+                }
+            }
+        }
+        None => {
+            println!("No daemon PID file found. Is the daemon running?");
+        }
+    }
+
+    Ok(())
+}
+
+async fn print_routes(daemon_port: u16) -> Result<()> {
+    let client = reqwest::Client::new();
+    let admin_token = auth::admin::load_admin_token()?;
+    let resp = client
+        .get(format!("http://localhost:{}/routes", daemon_port))
+        .header(auth::admin::ADMIN_HEADER, &admin_token)
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let data: serde_json::Value = r.json().await?;
+            let routes = data.get("routes").and_then(|r| r.as_array());
+            match routes {
+                Some(routes) if !routes.is_empty() => {
+                    println!("Active routes:");
+                    for route in routes {
+                        let name = route.get("app_name").and_then(|v| v.as_str()).unwrap_or("?");
+                        let hostname = route.get("hostname").and_then(|v| v.as_str()).unwrap_or("?");
+                        let port = route.get("target_port").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let pid = route.get("pid").and_then(|v| v.as_u64());
+                        let url = route.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+
+                        println!("  • {} → 127.0.0.1:{}", hostname, port);
+                        println!("    Name: {}", name);
+                        println!("    URL:  {}", url);
+                        if let Some(pid) = pid {
+                            println!("    PID:  {}", pid);
+                        }
+                    }
+                }
+                _ => println!("No active routes."),
+            }
+        }
+        _ => anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve"),
     }
 
     Ok(())
@@ -741,43 +1133,7 @@ async fn handle_route(action: RouteAction) -> Result<()> {
     match action {
         RouteAction::List => {
             let daemon_port = process::manager::read_daemon_port().unwrap_or(11434);
-            let resp = client
-                .get(format!("http://localhost:{}/routes", daemon_port))
-                .header(auth::admin::ADMIN_HEADER, &admin_token)
-                .send()
-                .await;
-
-            match resp {
-                Ok(r) if r.status().is_success() => {
-                    let data: serde_json::Value = r.json().await?;
-                    let routes = data.get("routes").and_then(|r| r.as_array());
-                    match routes {
-                        Some(routes) if !routes.is_empty() => {
-                            println!("Active routes:");
-                            for route in routes {
-                                let name = route.get("app_name").and_then(|v| v.as_str()).unwrap_or("?");
-                                let hostname = route.get("hostname").and_then(|v| v.as_str()).unwrap_or("?");
-                                let port = route.get("target_port").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let pid = route.get("pid").and_then(|v| v.as_u64());
-                                let url = route.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-
-                                println!("  • {} → 127.0.0.1:{}", hostname, port);
-                                println!("    Name: {}", name);
-                                println!("    URL:  {}", url);
-                                if let Some(pid) = pid {
-                                    println!("    PID:  {}", pid);
-                                }
-                            }
-                        }
-                        _ => {
-                            println!("No active routes.");
-                        }
-                    }
-                }
-                _ => {
-                    anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve");
-                }
-            }
+            print_routes(daemon_port).await?;
         }
         RouteAction::Add {
             name,
@@ -846,6 +1202,101 @@ async fn handle_route(action: RouteAction) -> Result<()> {
     Ok(())
 }
 
+async fn handle_alias(action: AliasAction) -> Result<()> {
+    let client = reqwest::Client::new();
+    let admin_token = auth::admin::load_admin_token()?;
+
+    match action {
+        AliasAction::List { daemon_port } => {
+            let effective_port = process::manager::read_daemon_port().unwrap_or(daemon_port);
+            let resp = client
+                .get(format!("http://localhost:{}/routes", effective_port))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: serde_json::Value = r.json().await?;
+                    let routes = data.get("routes").and_then(|r| r.as_array());
+                    match routes {
+                        Some(routes) if !routes.is_empty() => {
+                            println!("Aliases/routes:");
+                            for route in routes {
+                                let hostname = route
+                                    .get("hostname")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("?");
+                                let port = route
+                                    .get("target_port")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                println!("  • {} -> 127.0.0.1:{}", hostname, port);
+                            }
+                        }
+                        _ => println!("No aliases/routes."),
+                    }
+                }
+                _ => anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve"),
+            }
+        }
+        AliasAction::Add {
+            name,
+            port,
+            daemon_port,
+        } => {
+            let effective_port = process::manager::read_daemon_port().unwrap_or(daemon_port);
+            let body = serde_json::json!({
+                "name": name,
+                "port": port,
+                "auto_token": false,
+            });
+
+            let resp = client
+                .post(format!("http://localhost:{}/routes/register", effective_port))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&body)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: serde_json::Value = r.json().await?;
+                    let url = data["url"].as_str().unwrap_or("?");
+                    println!("✓ Alias registered: {}", url);
+                }
+                Ok(r) => {
+                    let text = r.text().await.unwrap_or_default();
+                    anyhow::bail!("Failed to register alias: {}", text);
+                }
+                Err(_) => anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve"),
+            }
+        }
+        AliasAction::Remove { name, daemon_port } => {
+            let effective_port = process::manager::read_daemon_port().unwrap_or(daemon_port);
+            let resp = client
+                .post(format!("http://localhost:{}/routes/deregister", effective_port))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&serde_json::json!({ "name": name }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    println!("✓ Alias removed for '{}'", name);
+                }
+                Ok(r) => {
+                    let text = r.text().await.unwrap_or_default();
+                    anyhow::bail!("Failed to remove alias: {}", text);
+                }
+                Err(_) => anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve"),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_trust() -> Result<()> {
     let config_dir = config::AppConfig::config_dir()?;
     let ca_path = config_dir.join("ca.pem");
@@ -883,12 +1334,24 @@ fn handle_trust() -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        let dest = std::path::Path::new("/usr/local/share/ca-certificates/hostless-ca.crt");
-        println!("Copying CA certificate to {}...", dest.display());
+        let trust = detect_linux_trust_config();
+        let dest = format!("{}/hostless-ca.crt", trust.cert_dir);
+
+        println!("Detected Linux trust setup: {}", trust.label);
+        println!("Copying CA certificate to {}...", dest);
         println!("This requires sudo access.");
 
+        let mkdir_status = std::process::Command::new("sudo")
+            .args(["mkdir", "-p", trust.cert_dir])
+            .status()
+            .context("Failed to create certificate trust directory")?;
+
+        if !mkdir_status.success() {
+            anyhow::bail!("Failed to create trust directory {}", trust.cert_dir);
+        }
+
         let status = std::process::Command::new("sudo")
-            .args(["cp", &ca_path.to_string_lossy(), &dest.to_string_lossy()])
+            .args(["cp", &ca_path.to_string_lossy(), &dest])
             .status()
             .context("Failed to copy CA certificate")?;
 
@@ -897,9 +1360,9 @@ fn handle_trust() -> Result<()> {
         }
 
         let status = std::process::Command::new("sudo")
-            .arg("update-ca-certificates")
+            .arg(trust.update_command)
             .status()
-            .context("Failed to run update-ca-certificates")?;
+            .with_context(|| format!("Failed to run {}", trust.update_command))?;
 
         if status.success() {
             println!("✓ CA certificate trusted");
@@ -915,6 +1378,121 @@ fn handle_trust() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_hosts(action: HostsAction) -> Result<()> {
+    match action {
+        HostsAction::Sync => {
+            let hostnames = load_route_hostnames_from_disk()?;
+            hosts::sync_hosts(&hostnames)?;
+            println!("✓ Synced {} hostless hostnames into /etc/hosts", hostnames.len());
+        }
+        HostsAction::Clean => {
+            hosts::clean_hosts()?;
+            println!("✓ Removed hostless-managed /etc/hosts entries");
+        }
+    }
+
+    Ok(())
+}
+
+fn load_route_hostnames_from_disk() -> Result<Vec<String>> {
+    let path = config::AppConfig::config_dir()?.join("routes.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let data = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+
+    let routes: Vec<serde_json::Value> = serde_json::from_str(&data)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+
+    let mut hostnames: Vec<String> = routes
+        .into_iter()
+        .filter_map(|r| r.get("hostname").and_then(|h| h.as_str()).map(|s| s.to_string()))
+        .collect();
+    hostnames.sort();
+    hostnames.dedup();
+    Ok(hostnames)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct LinuxTrustConfig {
+    label: &'static str,
+    cert_dir: &'static str,
+    update_command: &'static str,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_trust_configs() -> [LinuxTrustConfig; 4] {
+    [
+        LinuxTrustConfig {
+            label: "debian/ubuntu",
+            cert_dir: "/usr/local/share/ca-certificates",
+            update_command: "update-ca-certificates",
+        },
+        LinuxTrustConfig {
+            label: "arch",
+            cert_dir: "/etc/ca-certificates/trust-source/anchors",
+            update_command: "update-ca-trust",
+        },
+        LinuxTrustConfig {
+            label: "fedora/rhel/centos",
+            cert_dir: "/etc/pki/ca-trust/source/anchors",
+            update_command: "update-ca-trust",
+        },
+        LinuxTrustConfig {
+            label: "opensuse",
+            cert_dir: "/etc/pki/trust/anchors",
+            update_command: "update-ca-certificates",
+        },
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn command_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn detect_linux_trust_config() -> LinuxTrustConfig {
+    let configs = linux_trust_configs();
+
+    if let Ok(os_release) = std::fs::read_to_string("/etc/os-release") {
+        let data = os_release.to_lowercase();
+        if data.contains("arch") {
+            return configs[1];
+        }
+        if data.contains("fedora") || data.contains("rhel") || data.contains("centos") {
+            return configs[2];
+        }
+        if data.contains("suse") {
+            return configs[3];
+        }
+        if data.contains("debian") || data.contains("ubuntu") {
+            return configs[0];
+        }
+    }
+
+    // Fallback: probe available trust commands + expected trust directory roots.
+    for config in configs {
+        let parent_exists = Path::new(config.cert_dir)
+            .parent()
+            .map(|parent| parent.exists())
+            .unwrap_or(false);
+        if command_exists(config.update_command) && parent_exists {
+            return config;
+        }
+    }
+
+    // Safe fallback for unknown distros.
+    configs[0]
 }
 
 /// Guard that cleans up daemon files when dropped (foreground mode).

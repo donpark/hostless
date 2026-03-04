@@ -16,6 +16,7 @@ use axum::{
 };
 use tracing::debug;
 
+use super::pages;
 use super::reverse_proxy;
 use super::AppState;
 
@@ -77,7 +78,10 @@ pub async fn host_dispatch(
     debug!(hostname = hostname.as_str(), "Host dispatch → reverse proxy");
 
     // Look up the route
-    let route = state.route_table.lookup(&hostname).await;
+    let route = state
+        .route_table
+        .lookup_with_wildcard(&hostname, state.enable_wildcard_routes)
+        .await;
 
     match route {
         Some(route) => {
@@ -85,15 +89,13 @@ pub async fn host_dispatch(
         }
         None => {
             // No route registered for this subdomain
-            (
-                StatusCode::NOT_FOUND,
-                format!(
-                    "No app registered for '{}'. Use 'hostless run {} <command>' to start one.",
-                    hostname,
-                    hostname.strip_suffix(".localhost").unwrap_or(&hostname)
-                ),
-            )
-                .into_response()
+            let routes = state.route_table.list().await;
+            let html = pages::render_not_found_for_route(&hostname, &routes);
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(axum::body::Body::from(html))
+                .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response())
         }
     }
 }
