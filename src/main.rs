@@ -1,0 +1,988 @@
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+use tracing::info;
+
+mod auth;
+mod config;
+mod process;
+mod providers;
+mod server;
+mod tls;
+mod vault;
+
+#[derive(Parser)]
+#[command(name = "hostless", version, about = "Local AI proxy that manages LLM API keys securely")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the proxy server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "11434")]
+        port: u16,
+
+        /// Enable TLS with auto-generated local certificates
+        #[arg(long)]
+        tls: bool,
+
+        /// Verbose logging
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Dev mode: allow unauthenticated access from bare localhost/127.0.0.1
+        /// and requests with no Origin header (CLI/curl). Without this flag,
+        /// ALL clients must present a valid bridge token.
+        #[arg(long)]
+        dev_mode: bool,
+
+        /// Run as a background daemon
+        #[arg(long)]
+        daemon: bool,
+    },
+
+    /// Run a command through the hostless proxy (assigns <name>.localhost subdomain)
+    Run {
+        /// App name (becomes <name>.localhost)
+        name: String,
+
+        /// Command to run (use -- to separate from hostless args)
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+
+        /// Override the port assigned to the app
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Hostless daemon port (default: auto-detect or 11434)
+        #[arg(long)]
+        daemon_port: Option<u16>,
+
+        /// Restrict to specific providers (comma-separated: openai,anthropic,google)
+        #[arg(long, value_delimiter = ',')]
+        providers: Option<Vec<String>>,
+
+        /// Restrict to specific models (glob patterns, comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        models: Option<Vec<String>>,
+
+        /// Rate limit in requests per hour
+        #[arg(long)]
+        rate_limit: Option<u64>,
+
+        /// Token TTL in seconds (default: 86400 = 24h)
+        #[arg(long, default_value = "86400")]
+        ttl: u64,
+
+        /// Skip auto-token provisioning
+        #[arg(long)]
+        no_token: bool,
+    },
+
+    /// Stop the hostless daemon
+    Stop,
+
+    /// Manage app routes
+    Route {
+        #[command(subcommand)]
+        action: RouteAction,
+    },
+
+    /// Trust the hostless CA certificate in the system store
+    Trust,
+
+    /// Manage API keys
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
+
+    /// Manage allowed origins
+    Origins {
+        #[command(subcommand)]
+        action: OriginsAction,
+    },
+
+    /// Start OAuth login with a provider
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+
+    /// Manage bridge tokens for apps and CLI clients
+    Token {
+        #[command(subcommand)]
+        action: TokenAction,
+    },
+
+}
+
+#[derive(Subcommand)]
+enum KeysAction {
+    /// Add an API key for a provider
+    Add {
+        /// Provider name (openai, anthropic, google, openrouter, or custom)
+        provider: String,
+        /// The API key
+        api_key: String,
+        /// Optional custom base URL for the provider
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// List stored providers
+    List,
+    /// Remove a provider's API key
+    Remove {
+        /// Provider name
+        provider: String,
+    },
+    /// Migrate legacy encrypted keys.vault into plaintext keys.env (best effort)
+    Migrate,
+}
+
+#[derive(Subcommand)]
+enum OriginsAction {
+    /// List allowed origins
+    List,
+    /// Remove an allowed origin
+    Remove {
+        /// Origin URL (e.g., https://myapp.com)
+        origin: String,
+    },
+    /// Add an allowed origin manually
+    Add {
+        /// Origin URL (e.g., https://myapp.com)
+        origin: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RouteAction {
+    /// List active routes
+    List,
+    /// Add a route manually (register an app without process wrapping)
+    Add {
+        /// App name (becomes <name>.localhost)
+        name: String,
+        /// Target port on 127.0.0.1
+        #[arg(long)]
+        port: u16,
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+    /// Remove a route
+    Remove {
+        /// App name or hostname (e.g., "myapp" or "myapp.localhost")
+        name: String,
+        /// Hostless daemon port (default: 11434)
+        #[arg(long, default_value = "11434")]
+        daemon_port: u16,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// Start OAuth login with a provider
+    Login {
+        /// Provider name (openrouter)
+        provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenAction {
+    /// Create a new bridge token for CLI or app use
+    Create {
+        /// Human-readable app name (e.g., "my-cli-tool")
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Origin to bind this token to (e.g., "http://myapp.localhost:1355").
+        /// Use "*" for CLI tokens that don't send an Origin header.
+        #[arg(long, default_value = "*")]
+        origin: String,
+
+        /// Restrict to specific providers (comma-separated: openai,anthropic,google)
+        #[arg(long, value_delimiter = ',')]
+        providers: Option<Vec<String>>,
+
+        /// Restrict to specific models (glob patterns, comma-separated: gpt-4o*,claude-3-haiku*)
+        #[arg(long, value_delimiter = ',')]
+        models: Option<Vec<String>>,
+
+        /// Rate limit in requests per hour
+        #[arg(long)]
+        rate_limit: Option<u64>,
+
+        /// Token time-to-live in seconds (default: 86400 = 24 hours)
+        #[arg(long, default_value = "86400")]
+        ttl: u64,
+    },
+    /// List all active tokens
+    List,
+    /// Revoke a token by prefix
+    Revoke {
+        /// Token string or prefix (e.g., "sk_local_abc...")
+        token: String,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Serve {
+            port,
+            tls,
+            verbose,
+            dev_mode,
+            daemon,
+        } => {
+            init_tracing(verbose);
+            if dev_mode {
+                info!("⚠️  Dev mode enabled: bare localhost and no-origin requests bypass auth");
+            }
+
+            // Write daemon state files
+            process::manager::write_daemon_port(port).ok();
+            process::manager::write_daemon_pid(std::process::id()).ok();
+
+            if daemon {
+                // Daemon mode: fork and detach
+                println!("Starting hostless daemon on port {}...", port);
+                // Use daemonize to fork into background
+                let stdout = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(
+                        config::AppConfig::config_dir()
+                            .unwrap()
+                            .join("hostless.log"),
+                    )
+                    .unwrap();
+                let stderr = stdout.try_clone().unwrap();
+
+                let daemonize = daemonize::Daemonize::new()
+                    .working_directory(std::env::current_dir().unwrap_or_else(|_| "/tmp".into()))
+                    .stdout(stdout)
+                    .stderr(stderr);
+
+                match daemonize.start() {
+                    Ok(_) => {
+                        // We're now in the daemon child process
+                        // Re-init tracing for the daemon
+                        init_tracing(verbose);
+
+                        // Update PID file with daemon's PID
+                        process::manager::write_daemon_pid(std::process::id()).ok();
+
+                        let app_state = server::AppState::new(port, dev_mode).await?;
+                        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+                        if tls {
+                            info!("Daemon: starting with TLS on https://localhost:{}", port);
+                            tls::serve_tls(app_state, addr).await?;
+                        } else {
+                            info!("Daemon: starting on http://localhost:{}", port);
+                            let app = server::create_router(app_state);
+                            let listener = tokio::net::TcpListener::bind(addr).await?;
+                            axum::serve(listener, app)
+                                .with_graceful_shutdown(shutdown_signal())
+                                .await?;
+                        }
+
+                        // Cleanup on exit
+                        process::manager::cleanup_daemon_files();
+                    }
+                    Err(e) => {
+                        anyhow::bail!("Failed to daemonize: {}", e);
+                    }
+                }
+            } else {
+                // Foreground mode (existing behavior)
+                let app_state = server::AppState::new(port, dev_mode).await?;
+                let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+                // Clean up daemon files on exit
+                let _cleanup_guard = DaemonCleanupGuard;
+
+                if tls {
+                    info!("Starting Hostless proxy with TLS on https://localhost:{}", port);
+                    tls::serve_tls(app_state, addr).await?;
+                } else {
+                    info!("Starting Hostless proxy on http://localhost:{}", port);
+                    let app = server::create_router(app_state);
+                    let listener = tokio::net::TcpListener::bind(addr).await?;
+                    info!("Listening on {}", addr);
+                    axum::serve(listener, app)
+                        .with_graceful_shutdown(shutdown_signal())
+                        .await?;
+                }
+            }
+        }
+
+        Commands::Run {
+            name,
+            command,
+            port,
+            daemon_port,
+            providers,
+            models,
+            rate_limit,
+            ttl,
+            no_token,
+        } => {
+            init_tracing(false);
+
+            // Check HOSTLESS=0 bypass
+            if std::env::var("HOSTLESS").map(|v| v == "0").unwrap_or(false) {
+                println!("HOSTLESS=0 set, running command directly without proxy");
+                let cmd_str = command.join(" ");
+                let status = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&cmd_str)
+                    .status()
+                    .context("Failed to run command")?;
+                std::process::exit(status.code().unwrap_or(1));
+            }
+
+            // Determine daemon port (explicit --daemon-port wins; else auto-detect from file; else default)
+            let effective_daemon_port = daemon_port
+                .or_else(process::manager::read_daemon_port)
+                .unwrap_or(11434);
+
+            ensure_daemon_ready_for_run(&name, effective_daemon_port).await?;
+
+            let cmd_str = command.join(" ");
+
+            info!(
+                event = "launch-wrapped-app",
+                app = name.as_str(),
+                daemon_port = effective_daemon_port,
+                "Launching wrapped app"
+            );
+
+            let config = process::manager::SpawnConfig {
+                name,
+                command: cmd_str,
+                port,
+                daemon_port: effective_daemon_port,
+                auto_token: !no_token,
+                allowed_providers: providers,
+                allowed_models: models,
+                rate_limit,
+                ttl,
+            };
+
+            let exit_code = process::manager::spawn_and_manage(config).await?;
+            std::process::exit(exit_code);
+        }
+
+        Commands::Stop => {
+            // Read PID from file and send SIGTERM
+            match process::manager::read_daemon_pid() {
+                Some(pid) => {
+                    use nix::sys::signal::{self, Signal};
+                    use nix::unistd::Pid;
+
+                    println!("Stopping hostless daemon (PID {})...", pid);
+                    match signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                        Ok(_) => {
+                            // Wait up to 5s for process to exit
+                            for _ in 0..50 {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                if signal::kill(Pid::from_raw(pid as i32), None).is_err() {
+                                    break;
+                                }
+                            }
+                            process::manager::cleanup_daemon_files();
+                            println!("✓ Daemon stopped");
+                        }
+                        Err(nix::errno::Errno::ESRCH) => {
+                            process::manager::cleanup_daemon_files();
+                            println!("Daemon was not running (stale PID file cleaned up)");
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Failed to stop daemon: {}", e);
+                        }
+                    }
+                }
+                None => {
+                    println!("No daemon PID file found. Is the daemon running?");
+                }
+            }
+        }
+
+        Commands::Route { action } => {
+            handle_route(action).await?;
+        }
+
+        Commands::Trust => {
+            handle_trust()?;
+        }
+
+        Commands::Keys { action } => {
+            init_tracing(false);
+            handle_keys(action).await?;
+        }
+
+        Commands::Origins { action } => {
+            init_tracing(false);
+            handle_origins(action).await?;
+        }
+
+        Commands::Auth { action } => {
+            init_tracing(false);
+            handle_auth(action).await?;
+        }
+
+        Commands::Token { action } => {
+            init_tracing(false);
+            handle_token(action).await?;
+        }
+
+    }
+
+    Ok(())
+}
+
+async fn ensure_daemon_ready_for_run(app_name: &str, daemon_port: u16) -> Result<()> {
+    if process::manager::is_daemon_running(daemon_port).await {
+        info!(
+            event = "ready",
+            app = app_name,
+            daemon_port = daemon_port,
+            source = "already-running",
+            "Hostless daemon is ready"
+        );
+        return Ok(());
+    }
+
+    info!(
+        event = "detected-not-running",
+        app = app_name,
+        daemon_port = daemon_port,
+        "Hostless daemon not detected"
+    );
+
+    let _start_lock = process::manager::acquire_daemon_start_lock()?;
+
+    if process::manager::is_daemon_running(daemon_port).await {
+        info!(
+            event = "ready",
+            app = app_name,
+            daemon_port = daemon_port,
+            source = "already-running-after-lock",
+            "Hostless daemon is ready"
+        );
+        return Ok(());
+    }
+
+    info!(
+        event = "starting-daemon",
+        app = app_name,
+        daemon_port = daemon_port,
+        "Starting hostless daemon"
+    );
+
+    let start_error = process::manager::start_daemon_process(daemon_port)
+        .err()
+        .map(|e| e.to_string());
+
+    let max_wait = Duration::from_secs(5);
+    let begin = Instant::now();
+    let mut attempt: u32 = 0;
+    let mut delay = Duration::from_millis(100);
+
+    while begin.elapsed() <= max_wait {
+        attempt += 1;
+        if process::manager::is_daemon_running(daemon_port).await {
+            info!(
+                event = "ready",
+                app = app_name,
+                daemon_port = daemon_port,
+                attempt = attempt,
+                elapsed_ms = begin.elapsed().as_millis() as u64,
+                source = "auto-start",
+                "Hostless daemon is ready"
+            );
+            return Ok(());
+        }
+
+        tokio::time::sleep(delay).await;
+        delay = std::cmp::min(delay * 2, Duration::from_secs(1));
+    }
+
+    let startup_cause = start_error
+        .map(|e| format!(" Startup error: {}", e))
+        .unwrap_or_default();
+
+    info!(
+        event = "startup-failed",
+        app = app_name,
+        daemon_port = daemon_port,
+        elapsed_ms = begin.elapsed().as_millis() as u64,
+        "Hostless daemon failed to become ready"
+    );
+
+    anyhow::bail!(
+        "Hostless daemon failed to start on port {} within 5s. \
+Start it manually with:\n  hostless serve --daemon --port {}{}",
+        daemon_port,
+        daemon_port,
+        startup_cause
+    );
+}
+
+async fn handle_keys(action: KeysAction) -> Result<()> {
+    let vault = vault::VaultStore::open().await?;
+
+    match action {
+        KeysAction::Add {
+            provider,
+            api_key,
+            base_url,
+        } => {
+            vault.add_key(&provider, &api_key, base_url.as_deref()).await?;
+            println!("✓ Stored API key for '{}'", provider);
+        }
+        KeysAction::List => {
+            let providers = vault.list_providers().await?;
+            if providers.is_empty() {
+                println!("No API keys stored. Use 'hostless keys add <provider> <key>' to add one.");
+            } else {
+                println!("Stored providers:");
+                for p in providers {
+                    println!(
+                        "  • {}{}",
+                        p.name,
+                        p.base_url
+                            .map(|u| format!(" ({})", u))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        }
+        KeysAction::Remove { provider } => {
+            vault.remove_key(&provider).await?;
+            println!("✓ Removed API key for '{}'", provider);
+        }
+        KeysAction::Migrate => {
+            let migrated = vault.migrate_legacy_json_vault().await?;
+            if migrated == 0 {
+                println!("No legacy keys migrated.");
+            } else {
+                println!("✓ Migrated {} key(s) from keys.vault to keys.env", migrated);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_origins(action: OriginsAction) -> Result<()> {
+    let mut cfg = config::AppConfig::load()?;
+
+    match action {
+        OriginsAction::List => {
+            if cfg.allowed_origins.is_empty() {
+                println!("No allowed origins. Origins are added when webapps complete the handshake.");
+            } else {
+                println!("Allowed origins:");
+                for origin in &cfg.allowed_origins {
+                    println!("  • {}", origin);
+                }
+            }
+        }
+        OriginsAction::Remove { origin } => {
+            cfg.allowed_origins.retain(|o| o != &origin);
+            cfg.save()?;
+            println!("✓ Removed origin '{}'", origin);
+        }
+        OriginsAction::Add { origin } => {
+            if !cfg.allowed_origins.contains(&origin) {
+                cfg.allowed_origins.push(origin.clone());
+                cfg.save()?;
+            }
+            println!("✓ Added origin '{}'", origin);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_auth(action: AuthAction) -> Result<()> {
+    match action {
+        AuthAction::Login { provider } => {
+            auth::oauth::start_oauth_login(&provider).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_token(action: TokenAction) -> Result<()> {
+    let admin_token = auth::admin::load_admin_token()?;
+
+    match action {
+        TokenAction::Create {
+            name,
+            origin,
+            providers,
+            models,
+            rate_limit,
+            ttl,
+        } => {
+            // We need a running server to issue tokens, so call the server's API
+            // For CLI-created tokens, we talk to the running proxy
+            let client = reqwest::Client::new();
+            let proxy_url = "http://localhost:11434";
+
+            // Check if server is running
+            match client.get(format!("{}/health", proxy_url)).send().await {
+                Ok(r) if r.status().is_success() => {}
+                _ => {
+                    anyhow::bail!(
+                        "Hostless proxy is not running. Start it with: hostless serve\n\
+                         Tokens can only be created while the server is running."
+                    );
+                }
+            }
+
+            // Use the dedicated CLI token endpoint (no dialog needed)
+            let body = serde_json::json!({
+                "origin": origin,
+                "name": name,
+                "allowed_providers": providers,
+                "allowed_models": models,
+                "rate_limit": rate_limit,
+                "ttl": ttl,
+            });
+
+            let resp = client
+                .post(format!("{}/auth/token", proxy_url))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&body)
+                .send()
+                .await?;
+
+            if resp.status().is_success() {
+                let data: serde_json::Value = resp.json().await?;
+                let token = data.get("token").and_then(|t| t.as_str()).unwrap_or("unknown");
+                println!("✓ Bridge token created");
+                if let Some(ref n) = name {
+                    println!("  App name:   {}", n);
+                }
+                println!("  Origin:     {}", origin);
+                if let Some(ref p) = providers {
+                    println!("  Providers:  {}", p.join(", "));
+                }
+                if let Some(ref m) = models {
+                    println!("  Models:     {}", m.join(", "));
+                }
+                if let Some(rl) = rate_limit {
+                    println!("  Rate limit: {} req/hr", rl);
+                }
+                println!("  TTL:        {}s", ttl);
+                println!("  Token:      {}", token);
+                println!("\n  Use: Authorization: Bearer {}", token);
+            } else {
+                let text = resp.text().await.unwrap_or_default();
+                anyhow::bail!("Failed to create token: {}", text);
+            }
+        }
+        TokenAction::List => {
+            let client = reqwest::Client::new();
+            let resp = client
+                .get("http://localhost:11434/auth/tokens")
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: serde_json::Value = r.json().await?;
+                    let tokens = data.get("tokens").and_then(|t| t.as_array());
+                    match tokens {
+                        Some(tokens) if !tokens.is_empty() => {
+                            println!("Active bridge tokens:");
+                            for t in tokens {
+                                let prefix = t.get("token_prefix").and_then(|v| v.as_str()).unwrap_or("???");
+                                let origin = t.get("origin").and_then(|v| v.as_str()).unwrap_or("?");
+                                let app = t.get("app_name").and_then(|v| v.as_str());
+                                let expires = t.get("expires_in_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let providers = t.get("allowed_providers").and_then(|v| v.as_array());
+                                let models = t.get("allowed_models").and_then(|v| v.as_array());
+
+                                println!("  • {}", prefix);
+                                if let Some(name) = app {
+                                    println!("    Name:      {}", name);
+                                }
+                                println!("    Origin:    {}", origin);
+                                println!("    Expires:   {}s", expires);
+                                if let Some(p) = providers {
+                                    let names: Vec<&str> = p.iter().filter_map(|v| v.as_str()).collect();
+                                    println!("    Providers: {}", names.join(", "));
+                                }
+                                if let Some(m) = models {
+                                    let names: Vec<&str> = m.iter().filter_map(|v| v.as_str()).collect();
+                                    println!("    Models:    {}", names.join(", "));
+                                }
+                            }
+                        }
+                        _ => {
+                            println!("No active bridge tokens.");
+                        }
+                    }
+                }
+                _ => {
+                    anyhow::bail!("Hostless proxy is not running. Start it with: hostless serve");
+                }
+            }
+        }
+        TokenAction::Revoke { token } => {
+            let client = reqwest::Client::new();
+            let resp = client
+                .post("http://localhost:11434/auth/revoke")
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&serde_json::json!({ "token": token }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    println!("✓ Token revoked");
+                }
+                Ok(r) => {
+                    let text = r.text().await.unwrap_or_default();
+                    anyhow::bail!("Failed to revoke token: {}", text);
+                }
+                Err(_) => {
+                    anyhow::bail!("Hostless proxy is not running. Start it with: hostless serve");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_route(action: RouteAction) -> Result<()> {
+    let client = reqwest::Client::new();
+    let admin_token = auth::admin::load_admin_token()?;
+
+    match action {
+        RouteAction::List => {
+            let daemon_port = process::manager::read_daemon_port().unwrap_or(11434);
+            let resp = client
+                .get(format!("http://localhost:{}/routes", daemon_port))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: serde_json::Value = r.json().await?;
+                    let routes = data.get("routes").and_then(|r| r.as_array());
+                    match routes {
+                        Some(routes) if !routes.is_empty() => {
+                            println!("Active routes:");
+                            for route in routes {
+                                let name = route.get("app_name").and_then(|v| v.as_str()).unwrap_or("?");
+                                let hostname = route.get("hostname").and_then(|v| v.as_str()).unwrap_or("?");
+                                let port = route.get("target_port").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let pid = route.get("pid").and_then(|v| v.as_u64());
+                                let url = route.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+
+                                println!("  • {} → 127.0.0.1:{}", hostname, port);
+                                println!("    Name: {}", name);
+                                println!("    URL:  {}", url);
+                                if let Some(pid) = pid {
+                                    println!("    PID:  {}", pid);
+                                }
+                            }
+                        }
+                        _ => {
+                            println!("No active routes.");
+                        }
+                    }
+                }
+                _ => {
+                    anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve");
+                }
+            }
+        }
+        RouteAction::Add {
+            name,
+            port,
+            daemon_port,
+        } => {
+            let effective_port = process::manager::read_daemon_port().unwrap_or(daemon_port);
+            let body = serde_json::json!({
+                "name": name,
+                "port": port,
+                "auto_token": true,
+            });
+
+            let resp = client
+                .post(format!("http://localhost:{}/routes/register", effective_port))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&body)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let data: serde_json::Value = r.json().await?;
+                    let url = data["url"].as_str().unwrap_or("?");
+                    println!("✓ Route registered: {}", url);
+                    if let Some(token) = data["token"]["token"].as_str() {
+                        println!("  Token: {}", token);
+                    }
+                }
+                Ok(r) => {
+                    let text = r.text().await.unwrap_or_default();
+                    anyhow::bail!("Failed to register route: {}", text);
+                }
+                Err(_) => {
+                    anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve");
+                }
+            }
+        }
+        RouteAction::Remove { name, daemon_port } => {
+            let effective_port = process::manager::read_daemon_port().unwrap_or(daemon_port);
+            let resp = client
+                .post(format!(
+                    "http://localhost:{}/routes/deregister",
+                    effective_port
+                ))
+                .header(auth::admin::ADMIN_HEADER, &admin_token)
+                .json(&serde_json::json!({ "name": name }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    println!("✓ Route removed for '{}'", name);
+                }
+                Ok(r) => {
+                    let text = r.text().await.unwrap_or_default();
+                    anyhow::bail!("Failed to remove route: {}", text);
+                }
+                Err(_) => {
+                    anyhow::bail!("Hostless daemon is not running. Start it with: hostless serve");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_trust() -> Result<()> {
+    let config_dir = config::AppConfig::config_dir()?;
+    let ca_path = config_dir.join("ca.pem");
+
+    if !ca_path.exists() {
+        anyhow::bail!(
+            "No CA certificate found at {}. Start the server with --tls first to generate one.",
+            ca_path.display()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("Adding CA certificate to macOS login keychain...");
+        println!("(You may be prompted for your login password)");
+        let status = std::process::Command::new("security")
+            .args([
+                "add-trusted-cert",
+                "-d",
+                "-r",
+                "trustRoot",
+                "-k",
+            ])
+            .arg(dirs::home_dir().unwrap().join("Library/Keychains/login.keychain-db"))
+            .arg(&ca_path)
+            .status()
+            .context("Failed to run 'security' command")?;
+
+        if status.success() {
+            println!("✓ CA certificate trusted");
+        } else {
+            anyhow::bail!("Failed to trust CA certificate (exit code: {:?})", status.code());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let dest = std::path::Path::new("/usr/local/share/ca-certificates/hostless-ca.crt");
+        println!("Copying CA certificate to {}...", dest.display());
+        println!("This requires sudo access.");
+
+        let status = std::process::Command::new("sudo")
+            .args(["cp", &ca_path.to_string_lossy(), &dest.to_string_lossy()])
+            .status()
+            .context("Failed to copy CA certificate")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to copy CA certificate");
+        }
+
+        let status = std::process::Command::new("sudo")
+            .arg("update-ca-certificates")
+            .status()
+            .context("Failed to run update-ca-certificates")?;
+
+        if status.success() {
+            println!("✓ CA certificate trusted");
+        } else {
+            anyhow::bail!("Failed to update CA certificates");
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        println!("CA certificate is at: {}", ca_path.display());
+        println!("Please trust it manually in your OS certificate store.");
+    }
+
+    Ok(())
+}
+
+/// Guard that cleans up daemon files when dropped (foreground mode).
+struct DaemonCleanupGuard;
+
+impl Drop for DaemonCleanupGuard {
+    fn drop(&mut self) {
+        process::manager::cleanup_daemon_files();
+    }
+}
+
+fn init_tracing(verbose: bool) {
+    let filter = if verbose {
+        "hostless=debug,tower_http=debug"
+    } else {
+        "hostless=info"
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| filter.into()),
+        )
+        .try_init();
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install CTRL+C handler");
+    info!("Shutdown signal received, gracefully stopping...");
+}
