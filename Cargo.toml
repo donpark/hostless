@@ -107,9 +107,6 @@ hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
 http-body-util = "0.1"
 
-# Daemon mode
-daemonize = "0.5"
-
 [profile.release]
 opt-level = 3
 lto = true

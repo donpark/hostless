@@ -289,16 +289,50 @@ pub fn acquire_daemon_start_lock() -> Result<DaemonStartLock> {
 
 /// Start the hostless daemon process in background mode.
 pub fn start_daemon_process(port: u16) -> Result<()> {
+    start_daemon_process_with_options(port, false, false, false)
+}
+
+/// Start the hostless daemon process in background mode with explicit serve flags.
+pub fn start_daemon_process_with_options(
+    port: u16,
+    tls: bool,
+    dev_mode: bool,
+    verbose: bool,
+) -> Result<()> {
     let exe = std::env::current_exe()
         .context("Failed to resolve current hostless executable")?;
 
-    std::process::Command::new(exe)
-        .arg("serve")
-        .arg("--port")
-        .arg(port.to_string())
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("serve").arg("--port").arg(port.to_string());
+
+    if tls {
+        cmd.arg("--tls");
+    }
+    if dev_mode {
+        cmd.arg("--dev-mode");
+    }
+    if verbose {
+        cmd.arg("--verbose");
+    }
+
+    // Ensure the detached child does not recurse into daemon mode.
+    cmd.arg("--daemonized");
+
+    // Keep daemon output available for diagnostics.
+    let log_path = daemon_log_path()?;
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .context("Failed to open daemon log file")?;
+    let stderr = stdout
+        .try_clone()
+        .context("Failed to clone daemon log file handle")?;
+
+    cmd
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
         .spawn()
         .context("Failed to spawn hostless daemon process")?;
 
@@ -351,6 +385,11 @@ fn daemon_port_path() -> Result<PathBuf> {
 fn daemon_start_lock_path() -> Result<PathBuf> {
     let dir = crate::config::AppConfig::config_dir()?;
     Ok(dir.join("daemon-start.lock"))
+}
+
+fn daemon_log_path() -> Result<PathBuf> {
+    let dir = crate::config::AppConfig::config_dir()?;
+    Ok(dir.join("hostless.log"))
 }
 
 /// Spawn and manage a wrapped child process.

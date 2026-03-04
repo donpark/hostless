@@ -44,6 +44,10 @@ enum Commands {
         /// Run as a background daemon
         #[arg(long)]
         daemon: bool,
+
+        /// Internal flag used by daemon launcher to avoid re-daemonizing.
+        #[arg(long, hide = true)]
+        daemonized: bool,
     },
 
     /// Run a command through the hostless proxy (assigns <name>.localhost subdomain)
@@ -244,6 +248,7 @@ async fn main() -> Result<()> {
             verbose,
             dev_mode,
             daemon,
+            daemonized,
         } => {
             init_tracing(verbose);
             if dev_mode {
@@ -254,57 +259,12 @@ async fn main() -> Result<()> {
             process::manager::write_daemon_port(port).ok();
             process::manager::write_daemon_pid(std::process::id()).ok();
 
-            if daemon {
-                // Daemon mode: fork and detach
+            if daemon && !daemonized {
+                // Daemon mode: spawn a detached child process and return.
+                // Avoid forking from inside the Tokio runtime.
                 println!("Starting hostless daemon on port {}...", port);
-                // Use daemonize to fork into background
-                let stdout = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(
-                        config::AppConfig::config_dir()
-                            .unwrap()
-                            .join("hostless.log"),
-                    )
-                    .unwrap();
-                let stderr = stdout.try_clone().unwrap();
-
-                let daemonize = daemonize::Daemonize::new()
-                    .working_directory(std::env::current_dir().unwrap_or_else(|_| "/tmp".into()))
-                    .stdout(stdout)
-                    .stderr(stderr);
-
-                match daemonize.start() {
-                    Ok(_) => {
-                        // We're now in the daemon child process
-                        // Re-init tracing for the daemon
-                        init_tracing(verbose);
-
-                        // Update PID file with daemon's PID
-                        process::manager::write_daemon_pid(std::process::id()).ok();
-
-                        let app_state = server::AppState::new(port, dev_mode).await?;
-                        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-
-                        if tls {
-                            info!("Daemon: starting with TLS on https://localhost:{}", port);
-                            tls::serve_tls(app_state, addr).await?;
-                        } else {
-                            info!("Daemon: starting on http://localhost:{}", port);
-                            let app = server::create_router(app_state);
-                            let listener = tokio::net::TcpListener::bind(addr).await?;
-                            axum::serve(listener, app)
-                                .with_graceful_shutdown(shutdown_signal())
-                                .await?;
-                        }
-
-                        // Cleanup on exit
-                        process::manager::cleanup_daemon_files();
-                    }
-                    Err(e) => {
-                        anyhow::bail!("Failed to daemonize: {}", e);
-                    }
-                }
+                process::manager::start_daemon_process_with_options(port, tls, dev_mode, verbose)?;
+                return Ok(());
             } else {
                 // Foreground mode (existing behavior)
                 let app_state = server::AppState::new(port, dev_mode).await?;
