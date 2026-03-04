@@ -81,7 +81,7 @@ Commands that execute locally (no daemon management API call):
 
 ```
 ┌──────────────┐                           ┌──────────────────┐
-│ Browser App  │──myapp.localhost:11434──►  │                  │
+│ Browser App  │──myapp.localhost:11434──► │                  │
 │ (page load)  │◄───────────────────────── │                  │    ┌──────────────┐
 └──────────────┘  reverse proxy            │                  │───►│ Local App    │
                                            │    hostless      │◄───│ :4001        │
@@ -90,10 +90,10 @@ Commands that execute locally (no daemon management API call):
 │ (LLM call)   │◄───────────────────────── │                  │───►┌──────────────────┐
 └──────────────┘  LLM forward proxy        │                  │◄───│ OpenAI / Anthro  │
                                            └────────┬─────────┘    │ / Google API     │
-                                              ┌─────┴─────┐        └──────────────────┘
+                                              ┌─────┴──────┐       └──────────────────┘
                                               │ OS Keychain│
                                               │ keys.vault │
-                                              └───────────┘
+                                              └────────────┘
 ```
 
 Two traffic planes on a single port, separated by Host-header dispatch:

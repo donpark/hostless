@@ -3,13 +3,13 @@
 A local AI proxy that manages LLM API keys and injects them into forwarded requests. Your keys never leave your machine.
 
 ```
-┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
 │   Web App    │────▶│    Hostless      │────▶│  LLM Provider    │
 │  (browser)   │◀────│  localhost:11434 │◀────│  (OpenAI, etc.)  │
 │              │     │                  │     │                  │
 │  No API keys │     │  ✓ Encrypted     │     │  Receives key    │
 │  stored here │     │    key vault     │     │  from vault      │
-└──────────────┘     └─────────────────┘     └──────────────────┘
+└──────────────┘     └──────────────────┘     └──────────────────┘
 ```
 
 ## Features
