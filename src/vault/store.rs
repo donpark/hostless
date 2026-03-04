@@ -77,6 +77,8 @@ impl VaultStore {
         api_key: &str,
         base_url: Option<&str>,
     ) -> Result<()> {
+        self.refresh_from_disk().await?;
+
         let entry = VaultEntry {
             api_key: api_key.to_string(),
             base_url: base_url.map(|s| s.to_string()),
@@ -91,6 +93,8 @@ impl VaultStore {
 
     /// Get the decrypted API key for a provider
     pub async fn get_key(&self, provider: &str) -> Result<Option<(String, Option<String>)>> {
+        self.refresh_from_disk().await?;
+
         let data = self.data.read().await;
         let provider_lower = provider.to_lowercase();
 
@@ -103,6 +107,8 @@ impl VaultStore {
 
     /// Remove a provider's key
     pub async fn remove_key(&self, provider: &str) -> Result<()> {
+        self.refresh_from_disk().await?;
+
         let mut data = self.data.write().await;
         if data.entries.remove(&provider.to_lowercase()).is_none() {
             anyhow::bail!("No key found for provider '{}'", provider);
@@ -113,6 +119,8 @@ impl VaultStore {
 
     /// List all stored providers (without revealing keys)
     pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>> {
+        self.refresh_from_disk().await?;
+
         let data = self.data.read().await;
         let mut out: Vec<ProviderInfo> = data
             .entries
@@ -129,6 +137,10 @@ impl VaultStore {
     /// Check if a provider has a stored key
     #[allow(dead_code)]
     pub async fn has_key(&self, provider: &str) -> bool {
+        if self.refresh_from_disk().await.is_err() {
+            return false;
+        }
+
         let data = self.data.read().await;
         data.entries.contains_key(&provider.to_lowercase())
     }
@@ -222,6 +234,26 @@ impl VaultStore {
         tokio::fs::write(&self.vault_path, contents)
             .await
             .context("Failed to write vault file")?;
+        Ok(())
+    }
+
+    /// Refresh in-memory vault from disk to pick up external writes (e.g. CLI key updates).
+    async fn refresh_from_disk(&self) -> Result<()> {
+        if self.ephemeral {
+            return Ok(());
+        }
+
+        let data = if self.vault_path.exists() {
+            let raw = tokio::fs::read_to_string(&self.vault_path)
+                .await
+                .context("Failed to read vault file")?;
+            parse_env_vault(&raw)
+        } else {
+            VaultData::default()
+        };
+
+        let mut current = self.data.write().await;
+        *current = data;
         Ok(())
     }
 }

@@ -12,10 +12,10 @@ Additionally, hostless acts as a **reverse proxy** for local dev servers, assign
 - **Default port**: 11434 (configurable via `--port`)
 - **Config directory**: `~/.hostless/` (config.json, keys.vault, salt, routes.json, hostless.pid, hostless.port)
 
-## Symlinks
+## Related repos
 
-- **CLAUDE.md**: symlink to `AGENTS.md`.
-- **app**: `app` folder in the sibling directory is an Electrobun app that bundles and uses this proxy. It is internalized into this project through symlink `./app`.
+- **app**: `app` folder in the sibling directory is an Electrobun app that bundles and uses this proxy. It can be found using relative path `../app`.
+- **test-web**: `test-web` folder in the sibling directory is a single page HTML to be served using `http.server` as a webapp to test hostless with.
 
 ## Detailed Documentation
 

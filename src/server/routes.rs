@@ -466,6 +466,7 @@ pub struct RegisterResponse {
 
 pub async fn register_origin(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Response {
     info!("Origin registration request from: {}", req.origin);
@@ -486,29 +487,56 @@ pub async fn register_origin(
         scope_desc.push_str(&format!("\nRate limit: {} requests/hour", rl));
     }
 
-    // Show native dialog to ask user for permission
-    let approved = tokio::task::spawn_blocking({
-        let origin = req.origin.clone();
-        move || {
-            rfd::MessageDialog::new()
-                .set_title("Hostless - Access Request")
-                .set_description(&format!(
-                    "Allow '{}' to use your AI API credits?\n{}\n\nThis will grant the app access to make LLM requests through your local proxy.",
-                    origin,
-                    scope_desc,
-                ))
-                .set_buttons(rfd::MessageButtons::YesNo)
-                .show()
-        }
-    })
-    .await;
+    // Trusted desktop app requests can pre-authorize via admin token to avoid double prompts.
+    let approved = if ensure_local_management_access(&state, &headers).is_ok() {
+        info!(
+            "Origin registration for '{}' approved via local admin-authenticated request",
+            req.origin
+        );
+        true
+    } else {
+        let approval_result = tokio::task::spawn_blocking({
+            let origin = req.origin.clone();
+            move || {
+                rfd::MessageDialog::new()
+                    .set_title("Hostless - Access Request")
+                    .set_description(&format!(
+                        "Allow '{}' to use your AI API credits?\n{}\n\nThis will grant the app access to make LLM requests through your local proxy.",
+                        origin,
+                        scope_desc,
+                    ))
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show()
+            }
+        })
+        .await;
 
-    let approved = match approved {
-        Ok(rfd::MessageDialogResult::Yes) => true,
-        _ => false,
+        match approval_result {
+            Ok(result) => {
+                info!(
+                    "Native auth dialog result for origin '{}': {:?}",
+                    req.origin, result
+                );
+                matches!(
+                    result,
+                    rfd::MessageDialogResult::Yes | rfd::MessageDialogResult::Ok
+                )
+            }
+            Err(e) => {
+                error!(
+                    "Failed to join native auth dialog task for origin '{}': {}",
+                    req.origin, e
+                );
+                false
+            }
+        }
     };
 
     if !approved {
+        warn!(
+            "Origin registration denied for '{}': approval was not granted",
+            req.origin
+        );
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "User denied access"})),
