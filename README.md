@@ -23,6 +23,13 @@ Hostless is a local AI proxy and local reverse proxy.
 - OpenAI-compatible media passthrough: `POST /v1/images/generations`
 - OpenAI-compatible media passthrough: `POST /v1/files`
 
+## Status
+
+Mostly feature complete. Needs more integration tests, especially all the APIs endpoints.
+
+## License
+
+Apache 2.0
 
 ## Quick Start
 
