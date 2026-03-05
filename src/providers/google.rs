@@ -2,6 +2,7 @@ use super::Provider;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
+use tracing::warn;
 
 /// Google Gemini API adapter.
 /// Transforms OpenAI-format requests/responses to Google's generateContent format.
@@ -177,8 +178,8 @@ impl Provider for GoogleProvider {
             return Ok(None);
         }
 
-        let data: Value =
-            serde_json::from_str(trimmed).unwrap_or_else(|_| json!({"candidates": []}));
+        let data: Value = serde_json::from_str(trimmed)
+            .context("Invalid Google stream chunk JSON")?;
 
         let candidates = data.get("candidates").and_then(|c| c.as_array());
         if let Some(candidates) = candidates {
@@ -227,10 +228,14 @@ impl Provider for GoogleProvider {
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         // Google uses query parameter for API key, but we can also use header
         let mut headers = HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", api_key)).unwrap(),
-        );
+        match HeaderValue::from_str(&format!("Bearer {}", api_key)) {
+            Ok(value) => {
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+            Err(e) => {
+                warn!(error = %e, "Skipping invalid Google Authorization header value");
+            }
+        }
         headers
     }
 }
@@ -296,5 +301,19 @@ mod tests {
         let openai = provider.transform_response(gemini_resp).unwrap();
         assert_eq!(openai["choices"][0]["message"]["content"], "Hello!");
         assert_eq!(openai["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn test_transform_stream_chunk_invalid_json_is_error() {
+        let provider = GoogleProvider;
+        let err = provider.transform_stream_chunk("not-json").unwrap_err();
+        assert!(err.to_string().contains("Invalid Google stream chunk JSON"));
+    }
+
+    #[test]
+    fn test_auth_headers_invalid_key_does_not_panic() {
+        let provider = GoogleProvider;
+        let headers = provider.auth_headers("bad\nkey");
+        assert!(headers.get(reqwest::header::AUTHORIZATION).is_none());
     }
 }

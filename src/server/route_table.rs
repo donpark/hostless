@@ -145,7 +145,8 @@ impl RouteTable {
 
         routes
             .iter()
-            .find(|(registered, _)| hostname.ends_with(&format!(".{}", registered)))
+            .filter(|(registered, _)| hostname.ends_with(&format!(".{}", registered)))
+            .max_by_key(|(registered, _)| registered.len())
             .map(|(_, route)| route.clone())
     }
 
@@ -364,6 +365,19 @@ mod tests {
         let table = RouteTable::new(11434);
         table.register("myapp", 4001, None).await.unwrap();
         table.register("tenant.myapp", 4002, None).await.unwrap();
+
+        let found = table
+            .lookup_with_wildcard("tenant.myapp.localhost", true)
+            .await;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().target_port, 4002);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_wildcard_prefers_most_specific_suffix() {
+        let table = RouteTable::new(11434);
+        table.register("app", 4001, None).await.unwrap();
+        table.register("myapp", 4002, None).await.unwrap();
 
         let found = table
             .lookup_with_wildcard("tenant.myapp.localhost", true)

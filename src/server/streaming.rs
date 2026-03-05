@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     http::StatusCode,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -9,6 +9,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, trace};
 
 use crate::providers::Provider;
+
+fn extract_sse_data(line: &str) -> Option<&str> {
+    if let Some(stripped) = line.strip_prefix("data: ") {
+        return Some(stripped.trim());
+    }
+    if let Some(stripped) = line.strip_prefix("data:") {
+        return Some(stripped.trim());
+    }
+    None
+}
 
 /// Stream an SSE response from the upstream provider, transforming chunks per-provider.
 pub async fn stream_response(
@@ -54,10 +64,8 @@ pub async fn stream_response(
                 }
 
                 // Handle SSE "data: " prefix
-                let data = if let Some(stripped) = line.strip_prefix("data: ") {
-                    stripped.trim()
-                } else if let Some(stripped) = line.strip_prefix("data:") {
-                    stripped.trim()
+                let data = if let Some(data) = extract_sse_data(&line) {
+                    data
                 } else {
                     continue;
                 };
@@ -101,18 +109,28 @@ pub async fn stream_response(
             }
         }
 
-        // If there's remaining data in the buffer, try to process it
+        // Only process trailing data if it looks like a full final SSE data line.
         if !buffer.trim().is_empty() {
-            let data = buffer.strip_prefix("data: ").unwrap_or(&buffer).trim();
-            if data != "[DONE]" {
-                if let Ok(Some(transformed)) = provider.transform_stream_chunk(data) {
-                    let sse = if transformed == "[DONE]" {
-                        "data: [DONE]\n\n".to_string()
-                    } else {
-                        format!("data: {}\n\n", transformed)
-                    };
-                    let _ = tx.send(Ok(Bytes::from(sse))).await;
+            let trailing = buffer.trim();
+            if let Some(data) = extract_sse_data(trailing) {
+                if data != "[DONE]" {
+                    match provider.transform_stream_chunk(data) {
+                        Ok(Some(transformed)) => {
+                            let sse = if transformed == "[DONE]" {
+                                "data: [DONE]\n\n".to_string()
+                            } else {
+                                format!("data: {}\n\n", transformed)
+                            };
+                            let _ = tx.send(Ok(Bytes::from(sse))).await;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!("Error transforming trailing stream chunk: {}", e);
+                        }
+                    }
                 }
+            } else {
+                trace!("Discarding non-data trailing stream buffer");
             }
         }
     });
@@ -126,5 +144,19 @@ pub async fn stream_response(
         .header("Cache-Control", "no-cache")
         .header("Connection", "keep-alive")
         .body(body)
-        .unwrap()
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_sse_data;
+
+    #[test]
+    fn test_extract_sse_data() {
+        assert_eq!(extract_sse_data("data: hello"), Some("hello"));
+        assert_eq!(extract_sse_data("data:hello"), Some("hello"));
+        assert_eq!(extract_sse_data("data:   hello  "), Some("hello"));
+        assert_eq!(extract_sse_data("event: ping"), None);
+        assert_eq!(extract_sse_data(""), None);
+    }
 }

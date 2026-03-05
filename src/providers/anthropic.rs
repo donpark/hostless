@@ -2,6 +2,7 @@ use super::Provider;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{json, Value};
+use tracing::warn;
 
 /// Anthropic Messages API adapter.
 /// Transforms OpenAI-format requests/responses to Anthropic's native format.
@@ -45,7 +46,7 @@ impl Provider for AnthropicProvider {
         let model = body
             .get("model")
             .and_then(|m| m.as_str())
-            .unwrap_or("claude-sonnet-4-20250514");
+            .unwrap_or("claude-3-5-sonnet-latest");
 
         // Build Anthropic request body
         let mut anthropic_body = json!({
@@ -149,7 +150,7 @@ impl Provider for AnthropicProvider {
         }
 
         let data: Value = serde_json::from_str(trimmed)
-            .unwrap_or_else(|_| json!({"type": "unknown"}));
+            .context("Invalid Anthropic stream chunk JSON")?;
 
         let event_type = data.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
@@ -232,10 +233,14 @@ impl Provider for AnthropicProvider {
 
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            HeaderName::from_static("x-api-key"),
-            HeaderValue::from_str(api_key).unwrap(),
-        );
+        match HeaderValue::from_str(api_key) {
+            Ok(value) => {
+                headers.insert(HeaderName::from_static("x-api-key"), value);
+            }
+            Err(e) => {
+                warn!(error = %e, "Skipping invalid Anthropic API key header value");
+            }
+        }
         headers.insert(
             HeaderName::from_static("anthropic-version"),
             HeaderValue::from_static("2023-06-01"),
@@ -272,6 +277,20 @@ mod tests {
     }
 
     #[test]
+    fn test_transform_request_uses_latest_default_model() {
+        let provider = AnthropicProvider;
+        let body = json!({
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let (_url, transformed, _headers) = provider
+            .transform_request("https://api.anthropic.com", &body)
+            .unwrap();
+
+        assert_eq!(transformed["model"], "claude-3-5-sonnet-latest");
+    }
+
+    #[test]
     fn test_transform_response() {
         let provider = AnthropicProvider;
         let anthropic_resp = json!({
@@ -286,5 +305,25 @@ mod tests {
         let openai = provider.transform_response(anthropic_resp).unwrap();
         assert_eq!(openai["choices"][0]["message"]["content"], "Hello!");
         assert_eq!(openai["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn test_transform_stream_chunk_invalid_json_is_error() {
+        let provider = AnthropicProvider;
+        let err = provider.transform_stream_chunk("{not-json").unwrap_err();
+        assert!(err.to_string().contains("Invalid Anthropic stream chunk JSON"));
+    }
+
+    #[test]
+    fn test_auth_headers_invalid_key_does_not_panic() {
+        let provider = AnthropicProvider;
+        let headers = provider.auth_headers("bad\nkey");
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(
+            headers
+                .get("anthropic-version")
+                .and_then(|v| v.to_str().ok()),
+            Some("2023-06-01")
+        );
     }
 }

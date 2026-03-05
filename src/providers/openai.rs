@@ -2,6 +2,7 @@ use super::Provider;
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
+use tracing::warn;
 
 /// OpenAI-compatible provider.
 /// Works for OpenAI, OpenRouter, Groq, Together, and any OpenAI-compatible API.
@@ -41,10 +42,26 @@ impl Provider for OpenAIProvider {
 
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", api_key)).unwrap(),
-        );
+        match HeaderValue::from_str(&format!("Bearer {}", api_key)) {
+            Ok(value) => {
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+            Err(e) => {
+                warn!(error = %e, "Skipping invalid OpenAI Authorization header value");
+            }
+        }
         headers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_headers_invalid_key_does_not_panic() {
+        let provider = OpenAIProvider;
+        let headers = provider.auth_headers("bad\nkey");
+        assert!(headers.get(reqwest::header::AUTHORIZATION).is_none());
     }
 }

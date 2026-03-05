@@ -517,6 +517,21 @@ async fn test_127_0_0_1_falls_through() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// Bracketed IPv6 host falls through to management API.
+#[tokio::test]
+async fn test_ipv6_host_falls_through() {
+    let (_state, router) = create_test_app(11434);
+
+    let req = Request::builder()
+        .uri("/health")
+        .header("host", "[::1]:11434")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
 /// Proxy strips hop-by-hop headers from backend response
 /// (proxy.test.ts: "strips hop-by-hop headers from proxied responses")
 #[tokio::test]
@@ -798,6 +813,26 @@ async fn test_auth_revoke_rejects_non_localhost_origin() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({ "token": "sk_local_fake" }).to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// POST /auth/token rejects non-localhost Host header.
+#[tokio::test]
+async fn test_auth_token_rejects_non_localhost_host() {
+    let (state, router) = create_test_app(11434);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/auth/token")
+        .header("host", "evil.example")
+        .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "origin": "*" }).to_string(),
         ))
         .unwrap();
 

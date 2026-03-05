@@ -26,14 +26,28 @@ fn extract_hostname(req: &Request) -> Option<String> {
     req.headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(|host| {
-            // Strip port if present
-            if let Some((hostname, _port)) = host.rsplit_once(':') {
-                hostname.to_string()
-            } else {
-                host.to_string()
-            }
-        })
+        .map(parse_host_header)
+}
+
+fn parse_host_header(host: &str) -> String {
+    // RFC 3986 bracketed IPv6 literal: [::1] or [::1]:11434
+    if let Some(rest) = host.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let end_idx = end + 1;
+            return host[..=end_idx].to_string();
+        }
+        return host.to_string();
+    }
+
+    // host:port for common IPv4/domain hosts
+    if host.matches(':').count() == 1 {
+        if let Some((hostname, _port)) = host.rsplit_once(':') {
+            return hostname.to_string();
+        }
+    }
+
+    // No explicit port or non-bracketed multi-colon host; keep as-is.
+    host.to_string()
 }
 
 /// Check if a hostname is a `.localhost` subdomain (not bare `localhost`).
@@ -124,6 +138,18 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(extract_hostname(&req).unwrap(), "myapp.localhost");
+
+        let req = Request::builder()
+            .header("host", "[::1]:11434")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_hostname(&req).unwrap(), "[::1]");
+
+        let req = Request::builder()
+            .header("host", "[::1]")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_hostname(&req).unwrap(), "[::1]");
     }
 
     #[test]

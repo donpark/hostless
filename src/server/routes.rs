@@ -34,13 +34,44 @@ fn is_bare_localhost_origin(origin: &str) -> bool {
     matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
 }
 
+fn is_bare_localhost_host(host: &str) -> bool {
+    let hostname = if let Some(rest) = host.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            &host[..=end + 1]
+        } else {
+            host
+        }
+    } else if host.matches(':').count() == 1 {
+        host.split_once(':').map(|(h, _)| h).unwrap_or(host)
+    } else {
+        host
+    };
+
+    matches!(hostname, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    let max_len = left_bytes.len().max(right_bytes.len());
+
+    let mut diff = left_bytes.len() ^ right_bytes.len();
+    for i in 0..max_len {
+        let a = *left_bytes.get(i).unwrap_or(&0);
+        let b = *right_bytes.get(i).unwrap_or(&0);
+        diff |= (a ^ b) as usize;
+    }
+
+    diff == 0
+}
+
 fn ensure_local_management_access(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
     let admin_header = headers
         .get(crate::auth::admin::ADMIN_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if admin_header.is_empty() || admin_header != state.admin_token {
+    if admin_header.is_empty() || !constant_time_eq(admin_header, &state.admin_token) {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({
@@ -715,6 +746,25 @@ pub async fn create_token(
             Json(json!({
                 "error": {
                     "message": "Direct token creation is only available from CLI (no Origin header). Browser apps must use /auth/register.",
+                    "type": "forbidden",
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let host_header = req
+        .headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !is_bare_localhost_host(host_header) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "message": "Direct token creation is restricted to localhost hostnames.",
                     "type": "forbidden",
                 }
             })),
