@@ -9,7 +9,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use futures::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -87,6 +90,68 @@ async fn spawn_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     });
 
     (addr, handle)
+}
+
+/// Spawn a WebSocket echo backend that mirrors text and binary messages.
+async fn spawn_ws_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+
+            tokio::spawn(async move {
+                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                    return;
+                };
+
+                while let Some(msg) = ws.next().await {
+                    let Ok(msg) = msg else {
+                        break;
+                    };
+
+                    match msg {
+                        Message::Text(text) => {
+                            if ws.send(Message::Text(text)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Message::Binary(bytes) => {
+                            if ws.send(Message::Binary(bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Message::Close(frame) => {
+                            let _ = ws.close(frame).await;
+                            break;
+                        }
+                        Message::Ping(payload) => {
+                            if ws.send(Message::Pong(payload)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Message::Pong(_) => {}
+                        Message::Frame(_) => {}
+                    }
+                }
+            });
+        }
+    });
+
+    (addr, handle)
+}
+
+/// Start hostless router on an ephemeral TCP port for full protocol integration tests.
+async fn start_router_server(router: axum::Router) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (port, handle)
 }
 
 /// Create an ephemeral AppState and its router for testing.
@@ -575,7 +640,7 @@ async fn test_strips_hop_by_hop_from_response() {
 }
 
 /// WebSocket upgrade request is detected and dispatched to WS handler
-/// (the actual WS proxying returns 502 in oneshot tests since there's no real TCP)
+/// (oneshot router tests still cannot complete upgrades end-to-end)
 #[tokio::test]
 async fn test_websocket_upgrade_detected() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "ok").await;
@@ -598,14 +663,46 @@ async fn test_websocket_upgrade_detected() {
         .unwrap();
 
     let resp = send_request(&router, req).await;
-    // WebSocket handler is reached but returns 501 (not yet implemented) or 502
-    // (can't complete TCP upgrade in oneshot mode). Either confirms dispatch works.
-    let status = resp.status().as_u16();
-    assert!(
-        status == 501 || status == 502,
-        "Expected 501 or 502 for WS upgrade, got {}",
-        status
+    // In oneshot mode upgrades are not available, so this path returns BAD_GATEWAY.
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
+/// Full websocket upgrade + echo roundtrip through hostless reverse proxy.
+#[tokio::test]
+async fn test_websocket_proxy_roundtrip_echo() {
+    let (ws_backend_addr, _ws_handle) = spawn_ws_echo_backend().await;
+
+    let (state, router) = create_test_app(0);
+    let (hostless_port, _server_handle) = start_router_server(router).await;
+
+    state
+        .route_table
+        .register("ws", ws_backend_addr.port(), None)
+        .await
+        .unwrap();
+
+    let mut req = format!("ws://127.0.0.1:{}/ws", hostless_port)
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        "Host",
+        format!("ws.localhost:{}", hostless_port).parse().unwrap(),
     );
+
+    let (mut client_ws, _resp): (
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        _
+    ) = tokio_tungstenite::connect_async(req).await.unwrap();
+
+    client_ws
+        .send(Message::Text("ping-through-proxy".into()))
+        .await
+        .unwrap();
+
+    let echoed = client_ws.next().await.unwrap().unwrap();
+    assert_eq!(echoed, Message::Text("ping-through-proxy".into()));
+
+    let _ = client_ws.close(None).await;
 }
 
 // ═══════════════════════════════════════════════════════════════════

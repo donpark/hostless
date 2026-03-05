@@ -7,7 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use tokio::io::copy_bidirectional;
 use tracing::{debug, error, warn};
 
 use super::AppState;
@@ -195,16 +196,116 @@ pub async fn reverse_proxy(
 /// WebSocket upgrade handling is intentionally disabled until full hyper
 /// on_upgrade support is implemented.
 async fn handle_websocket_upgrade(
-    _target_port: u16,
-    _hops: u32,
-    _req: Request,
+    target_port: u16,
+    hops: u32,
+    mut req: Request,
 ) -> Response {
-    warn!("WebSocket proxying is disabled until full upgrade support is implemented");
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "WebSocket proxying is not yet implemented",
-    )
-        .into_response()
+    // Capture client upgrade handle before consuming request parts.
+    let client_on_upgrade = hyper::upgrade::on(&mut req);
+
+    let (parts, body) = req.into_parts();
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+
+    let upstream_uri: Uri = match format!("http://127.0.0.1:{}{}", target_port, path_and_query)
+        .parse()
+    {
+        Ok(uri) => uri,
+        Err(e) => {
+            warn!(target_port = target_port, error = %e, "Rejected malformed WebSocket upstream URI");
+            return (
+                StatusCode::BAD_REQUEST,
+                "Malformed WebSocket request URI",
+            )
+                .into_response();
+        }
+    };
+
+    let mut headers = parts.headers.clone();
+    headers.insert(
+        header::HOST,
+        HeaderValue::from_str(&format!("127.0.0.1:{}", target_port))
+            .unwrap_or_else(|_| HeaderValue::from_static("127.0.0.1")),
+    );
+    if let Ok(val) = HeaderValue::from_str(&(hops + 1).to_string()) {
+        headers.insert("x-hostless-hops", val);
+    }
+
+    let client = Client::builder(TokioExecutor::new())
+        .build_http::<Body>();
+
+    let mut upstream_req = Request::builder()
+        .method(parts.method)
+        .uri(upstream_uri);
+    if let Some(h) = upstream_req.headers_mut() {
+        *h = headers;
+    }
+
+    let upstream_req = match upstream_req.body(body) {
+        Ok(req) => req,
+        Err(e) => {
+            error!(error = %e, "Failed to build WebSocket upstream request");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut upstream_resp = match client.request(upstream_req).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!(target_port = target_port, error = %e, "WebSocket upstream request failed");
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Failed to reach upstream WebSocket endpoint",
+            )
+                .into_response();
+        }
+    };
+
+    if upstream_resp.status() != StatusCode::SWITCHING_PROTOCOLS {
+        warn!(
+            status = upstream_resp.status().as_u16(),
+            target_port = target_port,
+            "Upstream did not accept WebSocket upgrade"
+        );
+        return (
+            StatusCode::BAD_GATEWAY,
+            "Upstream rejected WebSocket upgrade",
+        )
+            .into_response();
+    }
+
+    let upstream_on_upgrade = hyper::upgrade::on(&mut upstream_resp);
+    let upstream_headers = upstream_resp.headers().clone();
+
+    tokio::spawn(async move {
+        let upgraded = tokio::try_join!(client_on_upgrade, upstream_on_upgrade);
+        let (client_ws, upstream_ws) = match upgraded {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(error = %e, "WebSocket upgrade failed");
+                return;
+            }
+        };
+
+        let mut client_ws = TokioIo::new(client_ws);
+        let mut upstream_ws = TokioIo::new(upstream_ws);
+
+        if let Err(e) = copy_bidirectional(&mut client_ws, &mut upstream_ws).await {
+            debug!(error = %e, "WebSocket proxy stream closed with error");
+        }
+    });
+
+    let mut response = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+    if let Some(resp_headers) = response.headers_mut() {
+        *resp_headers = upstream_headers;
+    }
+
+    response
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Strip hop-by-hop headers from a header map.

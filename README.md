@@ -62,7 +62,7 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - Management endpoints require `x-hostless-admin: <token>` plus localhost access constraints.
 - `POST /auth/token` is local-only: requires admin auth, no `Origin` header, and localhost `Host` (`localhost`, `127.0.0.1`, `[::1]`).
 - Token persistence modes: `off` (default), `file`, `keychain`.
-- SSE streaming is supported; WebSocket proxying is intentionally disabled until full upgrade support is implemented (`501 Not Implemented`).
+- SSE streaming is supported; WebSocket upgrade pass-through is supported for reverse-proxied local apps.
 
 ## Data Files
 

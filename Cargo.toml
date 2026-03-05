@@ -1,6 +1,6 @@
 [package]
 name = "hostless"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Local AI proxy that manages LLM API keys and injects them into forwarded requests"
 license = "MIT"
@@ -112,6 +112,9 @@ shell-words = "1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
 http-body-util = "0.1"
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
 
 [profile.release]
 opt-level = 3

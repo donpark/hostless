@@ -79,7 +79,15 @@ Forwards HTTP requests to `127.0.0.1:<target_port>` and pipes the response back.
 
 ### WebSocket Support
 
-WebSocket upgrade detection is implemented, but proxying is intentionally **disabled** and returns `501 Not Implemented` until full `hyper` `on_upgrade` support is implemented. This avoids partial/manual handshake behavior.
+WebSocket upgrade pass-through is implemented using `hyper` upgrade handling:
+
+1. Detect `Upgrade: websocket` request.
+2. Forward the upgrade request to upstream (`127.0.0.1:<target_port>`) with rewritten `Host`.
+3. Require upstream `101 Switching Protocols`.
+4. Upgrade both client and upstream connections via `hyper::upgrade::on(...)`.
+5. Pipe bytes bidirectionally until either side closes.
+
+If upstream does not accept the upgrade, hostless returns `502 Bad Gateway`.
 
 ### Constants
 
