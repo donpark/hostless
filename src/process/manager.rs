@@ -9,11 +9,16 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
+#[cfg(unix)]
+use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use tracing::{info, warn};
 
 /// Configuration for spawning a wrapped process.
@@ -410,10 +415,16 @@ pub async fn deregister_with_daemon(daemon_port: u16, name: &str) -> Result<()> 
 
 /// Check if the hostless daemon is running.
 pub async fn is_daemon_running(port: u16) -> bool {
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
-        .unwrap();
+    {
+        Ok(client) => client,
+        Err(e) => {
+            warn!(error = %e, "Failed to build daemon health check client");
+            return false;
+        }
+    };
 
     match client
         .get(format!("http://localhost:{}/health", port))
@@ -428,7 +439,7 @@ pub async fn is_daemon_running(port: u16) -> bool {
 /// Read the daemon port from ~/.hostless/hostless.port
 pub fn read_daemon_port() -> Option<u16> {
     let port_file = daemon_port_path().ok()?;
-    let content = std::fs::read_to_string(port_file).ok()?;
+    let content = read_locked_file_to_string(&port_file).ok()?;
     content.trim().parse().ok()
 }
 
@@ -507,14 +518,14 @@ pub fn start_daemon_process_with_options(
 /// Read the daemon PID from ~/.hostless/hostless.pid
 pub fn read_daemon_pid() -> Option<u32> {
     let pid_file = daemon_pid_path().ok()?;
-    let content = std::fs::read_to_string(pid_file).ok()?;
+    let content = read_locked_file_to_string(&pid_file).ok()?;
     content.trim().parse().ok()
 }
 
 /// Write daemon PID to ~/.hostless/hostless.pid
 pub fn write_daemon_pid(pid: u32) -> Result<()> {
     let path = daemon_pid_path()?;
-    std::fs::write(&path, pid.to_string())
+    write_locked_file(&path, &pid.to_string())
         .context("Failed to write daemon PID file")?;
     Ok(())
 }
@@ -522,7 +533,7 @@ pub fn write_daemon_pid(pid: u32) -> Result<()> {
 /// Write daemon port to ~/.hostless/hostless.port
 pub fn write_daemon_port(port: u16) -> Result<()> {
     let path = daemon_port_path()?;
-    std::fs::write(&path, port.to_string())
+    write_locked_file(&path, &port.to_string())
         .context("Failed to write daemon port file")?;
     Ok(())
 }
@@ -555,6 +566,53 @@ fn daemon_start_lock_path() -> Result<PathBuf> {
 fn daemon_log_path() -> Result<PathBuf> {
     let dir = crate::config::AppConfig::config_dir()?;
     Ok(dir.join("hostless.log"))
+}
+
+fn read_locked_file_to_string(path: &Path) -> Result<String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .context("Failed to open file for reading")?;
+    file.lock_shared().context("Failed to lock file for reading")?;
+
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)
+        .context("Failed to read file contents")?;
+    file.unlock().context("Failed to unlock file after read")?;
+    Ok(buf)
+}
+
+fn write_locked_file(path: &Path, content: &str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)
+        .context("Failed to open file for writing")?;
+    file.lock_exclusive().context("Failed to lock file for writing")?;
+
+    file.set_len(0).context("Failed to truncate file")?;
+    file.seek(SeekFrom::Start(0))
+        .context("Failed to seek to file start")?;
+    file.write_all(content.as_bytes())
+        .context("Failed to write file contents")?;
+    file.sync_all().context("Failed to flush file contents")?;
+    file.unlock().context("Failed to unlock file after write")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn forward_interrupt_to_child(child_pid: u32) {
+    if let Err(e) = signal::kill(Pid::from_raw(child_pid as i32), Signal::SIGINT) {
+        warn!(pid = child_pid, error = %e, "Failed to forward SIGINT to child process");
+    }
+}
+
+#[cfg(not(unix))]
+fn forward_interrupt_to_child(child: &mut tokio::process::Child) {
+    if let Err(e) = child.start_kill() {
+        warn!(error = %e, "Failed to terminate child process after Ctrl+C");
+    }
 }
 
 /// Spawn and manage a wrapped child process.
@@ -629,8 +687,37 @@ pub async fn spawn_and_manage(config: SpawnConfig) -> Result<i32> {
     let name_for_cleanup = config.name.clone();
     let daemon_port = config.daemon_port;
 
-    // Wait for the child to exit
-    let status = child.wait().await.context("Failed to wait for child")?;
+    // Wait for the child to exit, forwarding Ctrl+C to keep wrapped process lifecycle sane.
+    let status = loop {
+        tokio::select! {
+            wait_result = child.wait() => {
+                break wait_result.context("Failed to wait for child")?;
+            }
+            ctrl_c = tokio::signal::ctrl_c() => {
+                if let Err(e) = ctrl_c {
+                    warn!(error = %e, "Failed to listen for Ctrl+C while waiting on child process");
+                    continue;
+                }
+
+                match child.id() {
+                    Some(pid) => {
+                        info!(pid = pid, "Forwarding Ctrl+C to child process");
+                        #[cfg(unix)]
+                        {
+                            forward_interrupt_to_child(pid);
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            forward_interrupt_to_child(&mut child);
+                        }
+                    }
+                    None => {
+                        warn!("Received Ctrl+C but child PID is unavailable");
+                    }
+                }
+            }
+        }
+    };
 
     let exit_code = if let Some(code) = status.code() {
         code
@@ -760,6 +847,31 @@ mod tests {
             env.get("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS").unwrap(),
             ".localhost"
         );
+    }
+
+    #[test]
+    fn test_locked_file_roundtrip() {
+        let dir = temp_dir("hostless-manager-lock-io");
+        let path = dir.join("state.txt");
+
+        write_locked_file(&path, "12345").unwrap();
+        let value = read_locked_file_to_string(&path).unwrap();
+        assert_eq!(value, "12345");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_locked_file_overwrites_previous_content() {
+        let dir = temp_dir("hostless-manager-lock-overwrite");
+        let path = dir.join("state.txt");
+
+        write_locked_file(&path, "123456789").unwrap();
+        write_locked_file(&path, "42").unwrap();
+        let value = read_locked_file_to_string(&path).unwrap();
+        assert_eq!(value, "42");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

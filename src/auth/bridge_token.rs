@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -173,19 +175,37 @@ impl BridgeTokenManager {
     }
 
     fn write_persisted_file(path: &PathBuf, payload: &str) -> Result<()> {
-        use fs2::FileExt;
-
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
             .open(path)
             .context("Failed to open tokens file")?;
         file.lock_exclusive()
             .context("Failed to lock tokens file")?;
-        std::fs::write(path, payload).context("Failed to write tokens file")?;
+        file.set_len(0).context("Failed to truncate tokens file")?;
+        file.seek(SeekFrom::Start(0))
+            .context("Failed to seek to start of tokens file")?;
+        file.write_all(payload.as_bytes())
+            .context("Failed to write tokens file")?;
+        file.sync_all().context("Failed to flush tokens file")?;
         file.unlock().context("Failed to unlock tokens file")?;
         Ok(())
+    }
+
+    fn read_persisted_file(path: &PathBuf) -> Result<String> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .context("Failed to open tokens file")?;
+        file.lock_shared()
+            .context("Failed to lock tokens file for reading")?;
+
+        let mut raw = String::new();
+        file.read_to_string(&mut raw)
+            .context("Failed to read tokens file")?;
+        file.unlock().context("Failed to unlock tokens file")?;
+        Ok(raw)
     }
 
     fn persist_tokens_snapshot(&self, tokens: &HashMap<String, BridgeToken>) -> Result<()> {
@@ -238,7 +258,7 @@ impl BridgeTokenManager {
             return Ok(0);
         }
 
-        let raw = std::fs::read_to_string(&path).context("Failed to read tokens file")?;
+        let raw = Self::read_persisted_file(&path)?;
         let parsed = match self.persistence_mode {
             TokenPersistenceMode::File => serde_json::from_str::<PersistedTokenFile>(&raw)
                 .context("Failed to parse tokens file")?,
@@ -553,6 +573,11 @@ fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn temp_file(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{}-{}.json", prefix, rand::random::<u32>()))
+    }
 
     #[tokio::test]
     async fn test_issue_and_validate() {
@@ -780,5 +805,17 @@ mod tests {
             manager.validate(&token.token, "https://myapp.com").await,
             Err(TokenError::NotFound)
         ));
+    }
+
+    #[test]
+    fn test_persisted_file_roundtrip_with_locking() {
+        let path = temp_file("hostless-token-store");
+        let payload = "{\"version\":1,\"tokens\":[]}";
+
+        BridgeTokenManager::write_persisted_file(&path, payload).unwrap();
+        let read_back = BridgeTokenManager::read_persisted_file(&path).unwrap();
+        assert_eq!(read_back, payload);
+
+        let _ = std::fs::remove_file(path);
     }
 }
