@@ -92,6 +92,73 @@ async fn spawn_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     (addr, handle)
 }
 
+/// Spawn an OpenAI-compatible /v1/responses backend for integration tests.
+async fn spawn_openai_responses_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use axum::{
+        http::HeaderMap,
+        response::IntoResponse,
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+
+    let app = Router::new().route(
+        "/v1/responses",
+        post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+            let auth = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            if auth != "Bearer test-openai-key" {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": {"message": "missing auth"}
+                    })),
+                )
+                    .into_response();
+            }
+
+            if body
+                .get("stream")
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false)
+            {
+                return (
+                    StatusCode::OK,
+                    [("content-type", "text/event-stream")],
+                    "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\ndata: [DONE]\n\n",
+                )
+                    .into_response();
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "resp_test_123",
+                    "object": "response",
+                    "model": body.get("model").cloned().unwrap_or(json!("gpt-4o-mini")),
+                    "output": [{
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "hello from responses"}]
+                    }]
+                })),
+            )
+                .into_response()
+        }),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (addr, handle)
+}
+
 /// Spawn a WebSocket echo backend that mirrors text and binary messages.
 async fn spawn_ws_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -157,6 +224,15 @@ async fn start_router_server(router: axum::Router) -> (u16, tokio::task::JoinHan
 /// Create an ephemeral AppState and its router for testing.
 fn create_test_app(port: u16) -> (Arc<hostless::server::AppState>, axum::Router) {
     let state = hostless::server::AppState::new_ephemeral(port, true);
+    let router = hostless::server::create_router(state.clone());
+    (state, router)
+}
+
+fn create_test_app_with_dev_mode(
+    port: u16,
+    dev_mode: bool,
+) -> (Arc<hostless::server::AppState>, axum::Router) {
+    let state = hostless::server::AppState::new_ephemeral(port, dev_mode);
     let router = hostless::server::create_router(state.clone());
     (state, router)
 }
@@ -553,6 +629,128 @@ async fn test_subdomain_cannot_reach_llm_proxy() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// Subdomain traffic cannot reach /v1/responses endpoint.
+#[tokio::test]
+async fn test_subdomain_cannot_reach_responses_proxy() {
+    let (_state, router) = create_test_app(11434);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("host", "sneaky.localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"model":"gpt-4o-mini","input":"hello"}"#))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// /v1/responses proxies JSON requests to OpenAI-compatible upstreams.
+#[tokio::test]
+async fn test_responses_proxy_to_openai_compatible_upstream() {
+    let (backend_addr, _handle) = spawn_openai_responses_backend().await;
+
+    let (state, router) = create_test_app(11434);
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("host", "localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "input": "hello"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_to_string(resp).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["object"], "response");
+    assert_eq!(json["id"], "resp_test_123");
+}
+
+/// /v1/responses streaming path preserves SSE event lines from upstream.
+#[tokio::test]
+async fn test_responses_stream_passthrough_preserves_events() {
+    let (backend_addr, _handle) = spawn_openai_responses_backend().await;
+
+    let (state, router) = create_test_app(11434);
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("host", "localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "stream": true,
+                "input": "hello"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_to_string(resp).await;
+    assert!(body.contains("event: response.created"));
+    assert!(body.contains("event: response.output_text.delta"));
+    assert!(body.contains("data: [DONE]"));
+}
+
+/// /v1/responses rejects routed non-OpenAI provider model prefixes.
+#[tokio::test]
+async fn test_responses_rejects_non_openai_provider_models() {
+    let (_state, router) = create_test_app(11434);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("host", "localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "model": "anthropic/claude-3-5-sonnet-latest",
+                "input": "hello"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let body = body_to_string(resp).await;
+    assert!(body.contains("OpenAI-compatible models only"));
+}
+
 /// No Host header falls through to management API
 #[tokio::test]
 async fn test_no_host_header_falls_through() {
@@ -703,6 +901,127 @@ async fn test_websocket_proxy_roundtrip_echo() {
     assert_eq!(echoed, Message::Text("ping-through-proxy".into()));
 
     let _ = client_ws.close(None).await;
+}
+
+/// /v1/realtime websocket upgrade succeeds and proxies frames with strict auth enabled.
+#[tokio::test]
+async fn test_realtime_websocket_proxy_roundtrip_with_token() {
+    let (ws_backend_addr, _ws_handle) = spawn_ws_echo_backend().await;
+
+    let (state, router) = create_test_app_with_dev_mode(0, false);
+    let (hostless_port, _server_handle) = start_router_server(router).await;
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", ws_backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let token = state
+        .token_manager
+        .issue_full(
+            "http://localhost:11434",
+            std::time::Duration::from_secs(3600),
+            Some(vec!["gpt-4o-realtime*".to_string()]),
+            Some(vec!["openai".to_string()]),
+            None,
+            Some("realtime-test".to_string()),
+        )
+        .await;
+
+    let mut req = format!(
+        "ws://127.0.0.1:{}/v1/realtime?model=gpt-4o-realtime-preview",
+        hostless_port
+    )
+    .into_client_request()
+    .unwrap();
+
+    req.headers_mut().insert(
+        "Host",
+        format!("localhost:{}", hostless_port).parse().unwrap(),
+    );
+    req.headers_mut()
+        .insert("Origin", "http://localhost:11434".parse().unwrap());
+    req.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", token.token).parse().unwrap(),
+    );
+
+    let (mut client_ws, _resp): (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        _,
+    ) = tokio_tungstenite::connect_async(req).await.unwrap();
+
+    client_ws
+        .send(Message::Text("realtime-ping".into()))
+        .await
+        .unwrap();
+
+    let echoed = client_ws.next().await.unwrap().unwrap();
+    assert_eq!(echoed, Message::Text("realtime-ping".into()));
+}
+
+/// /v1/realtime rejects model scope violations before websocket upgrade.
+#[tokio::test]
+async fn test_realtime_websocket_rejects_model_scope_violation() {
+    let (ws_backend_addr, _ws_handle) = spawn_ws_echo_backend().await;
+
+    let (state, router) = create_test_app_with_dev_mode(0, false);
+    let (hostless_port, _server_handle) = start_router_server(router).await;
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", ws_backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let token = state
+        .token_manager
+        .issue_full(
+            "http://localhost:11434",
+            std::time::Duration::from_secs(3600),
+            Some(vec!["gpt-4o-mini*".to_string()]),
+            Some(vec!["openai".to_string()]),
+            None,
+            Some("realtime-scope-test".to_string()),
+        )
+        .await;
+
+    let mut req = format!(
+        "ws://127.0.0.1:{}/v1/realtime?model=gpt-4o-realtime-preview",
+        hostless_port
+    )
+    .into_client_request()
+    .unwrap();
+
+    req.headers_mut().insert(
+        "Host",
+        format!("localhost:{}", hostless_port).parse().unwrap(),
+    );
+    req.headers_mut()
+        .insert("Origin", "http://localhost:11434".parse().unwrap());
+    req.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", token.token).parse().unwrap(),
+    );
+
+    let err = tokio_tungstenite::connect_async(req).await.unwrap_err();
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("expected HTTP rejection, got: {}", other),
+    };
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 // ═══════════════════════════════════════════════════════════════════

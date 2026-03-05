@@ -145,6 +145,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     let api_routes = Router::new()
         .route("/v1/chat/completions", post(routes::chat_completions))
+        .route("/v1/responses", post(routes::responses))
+        .route("/v1/realtime", get(routes::realtime))
         .route("/v1/embeddings", post(routes::embeddings))
         .route_layer(axum_middleware::from_fn_with_state(
             state.clone(),

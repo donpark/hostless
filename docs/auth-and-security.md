@@ -47,7 +47,7 @@ Handler-facing expectations:
 - Callback payload includes resolved runtime `port` and `local_url`.
 - Bridge token is returned in URL fragment (`#token=...`) and never in query string.
 
-### Middleware Flow (`/v1/*` routes)
+### Middleware Flow (`/v1/*` routes, including `/v1/chat/completions`, `/v1/responses`, and `/v1/realtime`)
 
 1. Extract `Origin` header (empty for CLI)
 2. **Dev mode** (`--dev-mode`): bare localhost / empty origin → bypass auth entirely (no `ValidatedToken` in extensions → no scope checks)
@@ -70,6 +70,11 @@ Model name determines the upstream provider:
 - `gemini*` or `google/...` → Google
 - Everything else → OpenAI (default)
 - Explicit prefix: `openai/gpt-4o` strips prefix before forwarding
+
+Current endpoint support:
+- `/v1/chat/completions`: OpenAI-compatible request surface, transformed for Anthropic/Google when needed.
+- `/v1/responses`: OpenAI-compatible passthrough route (OpenAI provider only for now).
+- `/v1/realtime`: OpenAI-compatible websocket upgrade passthrough with pre-upgrade provider/model scope checks.
 
 The `Provider` trait handles request/response transformation so clients always use OpenAI-compatible format.
 

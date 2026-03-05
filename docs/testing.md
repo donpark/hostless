@@ -19,7 +19,7 @@ cargo test --features internal-testing
 | lib (src/lib.rs) | 41 | Unit tests across all modules |
 | bin (src/main.rs) | 41 | Same unit tests compiled in binary context |
 | auth_integration | 6 | Auth token flow, origin isolation, scope enforcement |
-| proxy_integration | 51 | Reverse proxy dispatch, route management, framework flags |
+| proxy_integration | 66 | Reverse proxy dispatch, route management, framework flags, API routing coverage |
 | openai_e2e | 3 (ignored) | Live API tests requiring `OPENAI_API_KEY` |
 
 ### Running Tests
@@ -99,7 +99,7 @@ Variants: `spawn_backend_with_headers()` (extra response headers), `spawn_echo_b
 
 ## Proxy Integration Tests (`tests/proxy_integration.rs`)
 
-51 tests ported from portless's test suite. Organized into sections:
+66 tests ported from portless's test suite plus hostless-specific hardening/compatibility coverage. Organized into sections:
 
 ### Dispatch + Reverse Proxy (18 tests)
 
@@ -119,10 +119,17 @@ Ported from `proxy.test.ts`:
 | `test_subdomain_cannot_reach_management` | Dispatch firewall test |
 | `test_subdomain_cannot_reach_auth` | Dispatch firewall test |
 | `test_subdomain_cannot_reach_llm_proxy` | Dispatch firewall test |
+| `test_subdomain_cannot_reach_responses_proxy` | Dispatch firewall test |
 | `test_no_host_header_falls_through` | No Host → management API |
 | `test_127_0_0_1_falls_through` | 127.0.0.1 → management API |
 | `test_strips_hop_by_hop_from_response` | "strips hop-by-hop headers from proxied responses" |
-| `test_websocket_upgrade_detected` | WS upgrade dispatched (501/502 — stubbed) |
+| `test_websocket_upgrade_detected` | WS upgrade detected in oneshot router tests (returns 502) |
+| `test_websocket_proxy_roundtrip_echo` | Full websocket upgrade + message echo through reverse proxy |
+| `test_responses_proxy_to_openai_compatible_upstream` | `/v1/responses` non-stream proxying |
+| `test_responses_stream_passthrough_preserves_events` | `/v1/responses` stream passthrough keeps SSE event names |
+| `test_responses_rejects_non_openai_provider_models` | `/v1/responses` guardrail for non-OpenAI provider prefixes |
+| `test_realtime_websocket_proxy_roundtrip_with_token` | `/v1/realtime` websocket proxy success path in strict auth mode |
+| `test_realtime_websocket_rejects_model_scope_violation` | `/v1/realtime` rejects model scope mismatch before upgrade |
 
 ### Route Management API (12 tests)
 

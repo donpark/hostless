@@ -147,6 +147,46 @@ pub async fn stream_response(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+/// Stream bytes through without SSE event/data transformation.
+/// Used for endpoints (for example OpenAI Responses) that emit structured SSE events.
+pub async fn stream_passthrough_response(upstream: reqwest::Response) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+
+    tokio::spawn(async move {
+        let mut byte_stream = upstream.bytes_stream();
+        while let Some(chunk_result) = byte_stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if tx.send(Ok(chunk)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading upstream passthrough stream: {}", e);
+                    let _ = tx
+                        .send(Ok(Bytes::from(
+                            "event: error\ndata: upstream stream interrupted\n\n",
+                        )))
+                        .await;
+                    let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let stream = ReceiverStream::new(rx);
+    let body = Body::from_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::extract_sse_data;

@@ -35,6 +35,12 @@ curl -X POST http://localhost:11434/v1/chat/completions \
   -H "Authorization: Bearer sk_local_..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
+
+# OpenAI Responses API (OpenAI-compatible models)
+curl -X POST http://localhost:11434/v1/responses \
+  -H "Authorization: Bearer sk_local_..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","input":"hello"}'
 ```
 
 ## Command Surface
@@ -62,7 +68,11 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - Management endpoints require `x-hostless-admin: <token>` plus localhost access constraints.
 - `POST /auth/token` is local-only: requires admin auth, no `Origin` header, and localhost `Host` (`localhost`, `127.0.0.1`, `[::1]`).
 - Token persistence modes: `off` (default), `file`, `keychain`.
-- SSE streaming is supported; WebSocket upgrade pass-through is supported for reverse-proxied local apps.
+- `/v1/chat/completions` and `/v1/responses` are supported on the local API plane.
+- `/v1/responses` currently supports OpenAI-compatible models only.
+- `/v1/realtime` websocket proxying is supported for OpenAI-compatible realtime models.
+- SSE streaming is supported; `/v1/responses` stream events are passed through without event-name rewriting.
+- WebSocket upgrade pass-through is supported for reverse-proxied local apps and `/v1/realtime` on the local API plane.
 
 ## Data Files
 
