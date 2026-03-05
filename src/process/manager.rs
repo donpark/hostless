@@ -334,6 +334,29 @@ pub fn build_child_env(
     env
 }
 
+fn requires_shell(command: &str) -> bool {
+    let shell_ops = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '\n'];
+    command.chars().any(|c| shell_ops.contains(&c))
+}
+
+fn prepare_child_command(command: &str) -> Result<tokio::process::Command> {
+    if requires_shell(command) {
+        let mut cmd = tokio::process::Command::new("/bin/sh");
+        cmd.arg("-c").arg(command);
+        return Ok(cmd);
+    }
+
+    let parts = shell_words::split(command)
+        .context("Failed to parse wrapped command")?;
+    let (program, args) = parts
+        .split_first()
+        .context("Wrapped command cannot be empty")?;
+
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args);
+    Ok(cmd)
+}
+
 /// Register a route with the running hostless daemon via HTTP.
 pub async fn register_with_daemon(
     config: &SpawnConfig,
@@ -659,9 +682,14 @@ pub async fn spawn_and_manage(config: SpawnConfig) -> Result<i32> {
     );
 
     // 5. Spawn the child process
-    let mut child = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&command)
+    if requires_shell(&command) {
+        warn!(
+            app = config.name.as_str(),
+            "Running wrapped command through shell due to shell operators"
+        );
+    }
+    let mut child_cmd = prepare_child_command(&command)?;
+    let mut child = child_cmd
         .envs(&env)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
@@ -827,6 +855,28 @@ mod tests {
         let cmd = inject_framework_flags("npm run dev", 4001);
         // npm doesn't auto-detect as vite without the word in the command
         assert_eq!(cmd, "npm run dev");
+    }
+
+    #[test]
+    fn test_requires_shell_detects_shell_operators() {
+        assert!(requires_shell("echo hi | cat"));
+        assert!(requires_shell("echo hi && echo there"));
+        assert!(requires_shell("echo $HOME"));
+        assert!(!requires_shell("npm run dev -- --port 4001"));
+    }
+
+    #[test]
+    fn test_prepare_child_command_direct_path() {
+        let cmd = prepare_child_command("npm run dev").unwrap();
+        let program = cmd.as_std().get_program().to_string_lossy().to_string();
+        assert_eq!(program, "npm");
+    }
+
+    #[test]
+    fn test_prepare_child_command_shell_fallback() {
+        let cmd = prepare_child_command("echo hi | cat").unwrap();
+        let program = cmd.as_std().get_program().to_string_lossy().to_string();
+        assert_eq!(program, "/bin/sh");
     }
 
     #[test]

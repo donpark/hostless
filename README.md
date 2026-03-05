@@ -59,9 +59,10 @@ Top-level commands are documented in `docs/cli-commands.md`.
 ## Security Notes
 
 - API keys are stored in `~/.hostless/keys.env` (plaintext dotenv format).
-- Management endpoints require `x-hostless-admin: <token>` and localhost origin constraints.
+- Management endpoints require `x-hostless-admin: <token>` plus localhost access constraints.
+- `POST /auth/token` is local-only: requires admin auth, no `Origin` header, and localhost `Host` (`localhost`, `127.0.0.1`, `[::1]`).
 - Token persistence modes: `off` (default), `file`, `keychain`.
-- SSE streaming is supported; WebSocket proxying is currently stubbed (`501 Not Implemented`).
+- SSE streaming is supported; WebSocket proxying is intentionally disabled until full upgrade support is implemented (`501 Not Implemented`).
 
 ## Data Files
 

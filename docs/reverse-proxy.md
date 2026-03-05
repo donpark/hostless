@@ -46,7 +46,7 @@ The outermost middleware layer on the Axum router. It inspects the `Host` header
 | Host header | Dispatch target |
 |---|---|
 | `<name>.localhost` or `<name>.localhost:<port>` | **Reverse proxy** → app's target port |
-| `localhost`, `127.0.0.1`, or missing | **Fall-through** → Axum router (management API + LLM proxy) |
+| `localhost`, `127.0.0.1`, `[::1]`, or missing | **Fall-through** → Axum router (management API + LLM proxy) |
 
 ### Security Guarantee
 
@@ -60,7 +60,7 @@ This is not a filter or access-control check — the dispatch layer routes subdo
 
 ### Key Functions
 
-- `extract_hostname(req)` — Extracts hostname from `Host` header, strips port
+- `extract_hostname(req)` — Extracts hostname from `Host` header with IPv4/IPv6-aware parsing, stripping port when present
 - `is_subdomain_host(hostname)` — Returns `true` for `*.localhost` but not bare `localhost` or `.localhost`
 - `host_dispatch(state, req, next)` — The axum middleware entry point
 
@@ -79,12 +79,7 @@ Forwards HTTP requests to `127.0.0.1:<target_port>` and pipes the response back.
 
 ### WebSocket Support
 
-WebSocket upgrade detection is implemented but the actual proxying is **stubbed** (returns `501 Not Implemented`). The handler:
-1. Detects `Upgrade: websocket` header
-2. Connects to upstream via TCP
-3. Sends the upgrade request
-4. Parses the 101 response
-5. Returns 501 — full bidirectional pipe requires hyper's `on_upgrade` API (tracked as future work)
+WebSocket upgrade detection is implemented, but proxying is intentionally **disabled** and returns `501 Not Implemented` until full `hyper` `on_upgrade` support is implemented. This avoids partial/manual handshake behavior.
 
 ### Constants
 
@@ -135,7 +130,7 @@ When `HOSTLESS_ENABLE_WILDCARD_ROUTES=1` is set at server startup, dispatch may 
 - Request: `tenant.myapp.localhost`
 - Result: forwards to `myapp.localhost` target
 
-Exact hostname matches always take priority over wildcard fallback.
+Exact hostname matches always take priority over wildcard fallback. For wildcard fallback, the most specific (longest) matching suffix route wins.
 
 ### Stale Route Cleanup
 

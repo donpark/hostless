@@ -18,7 +18,7 @@ $ hostless run myapp -- npm run dev
   3. Auto-provision bridge token scoped to http://myapp.localhost:11434
   4. Inject PORT, HOST, HOSTLESS_TOKEN, HOSTLESS_URL env vars
   5. Inject framework flags (--port, --host for vite/next/etc.)
-  6. Spawn child via /bin/sh -c
+  6. Spawn child directly when possible (shell fallback only for shell syntax)
   7. Wait for child exit
   8. Deregister route + revoke token
 ```
@@ -32,7 +32,7 @@ $ hostless run myapp -- npm run dev
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | `String` | optional | App name (becomes `<name>.localhost`) |
-| `command` | `String` | required | Shell command to execute |
+| `command` | `String` | required | Command to execute (direct spawn preferred; shell fallback for shell syntax) |
 | `port` | `Option<u16>` | random 4000-4999 | Override target port (`--app-port` / `HOSTLESS_APP_PORT`) |
 | `daemon_port` | `u16` | 11434 | Hostless server port |
 | `auto_token` | `bool` | true | Whether to provision a bridge token |
@@ -79,9 +79,17 @@ For wrapper commands containing `expo`, host injection uses `localhost`.
 | `HOSTLESS_URL` | `http://<name>.localhost:<daemon_port>` | The app's public URL |
 | `HOSTLESS_API` | `http://localhost:<daemon_port>` | Hostless management API |
 | `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` | `.localhost` | Allows Vite to serve `.localhost` subdomains |
-| `HOSTLESS_APP_PORT` | `<port>` | Optional app-port override default |
 
 Also prepends `node_modules/.bin` to `PATH` if it exists in CWD.
+
+### Command Execution Safety
+
+`spawn_and_manage()` executes commands in two modes:
+
+- **Direct mode (preferred)**: parses command words and spawns without a shell.
+- **Shell fallback**: if shell operators are detected (`|`, `&`, `;`, `<`, `>`, `` ` ``, `$`, parentheses, newline), runs via `/bin/sh -c`.
+
+This preserves advanced shell workflows while reducing accidental shell-injection surface for ordinary commands.
 
 ### Daemon Communication
 
@@ -95,13 +103,15 @@ Also prepends `node_modules/.bin` to `PATH` if it exists in CWD.
 | `write_daemon_port(port)` / `write_daemon_pid(pid)` | Write daemon state files |
 | `cleanup_daemon_files()` | Remove PID and port files |
 
+Daemon PID/port file reads and writes use file locking (`fs2`) to avoid concurrent state corruption.
+
 ## Daemon Mode
 
 **File**: `src/main.rs` (Serve command)
 
 `hostless serve --daemon` backgrounds the server process:
 
-1. Uses the `daemonize` crate to fork and detach
+1. Spawns a detached daemon process via `start_daemon_process_with_options(...)`
 2. Writes PID to `~/.hostless/hostless.pid`
 3. Writes port to `~/.hostless/hostless.port`
 4. On foreground exit (`hostless stop`), a `DaemonCleanupGuard` removes these files
@@ -139,4 +149,5 @@ When `HOSTLESS=0` is set in the environment, `hostless run` executes the command
 | Crate | Version | Purpose |
 |---|---|---|
 | `nix` | 0.29 | Signal sending (`SIGTERM`), PID liveness checks |
-| `daemonize` | 0.5 | Process backgrounding (fork + setsid) |
+| `fs2` | 0.4 | File locking for daemon state files |
+| `shell-words` | 1.x | Safe command tokenization for direct command spawn |

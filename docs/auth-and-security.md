@@ -27,7 +27,12 @@ Each token has:
 ### Two Token Creation Paths
 
 1. **`POST /auth/register`** — Browser apps. Shows a native OS dialog (rfd) asking user to approve. Origin required.
-2. **`POST /auth/token`** — CLI only. No dialog. Gated by requiring **no Origin header** (browsers always send one). This is what `hostless token create` and `curl` use.
+2. **`POST /auth/token`** — CLI/local automation path. No dialog. Gated by:
+	- valid admin header (`x-hostless-admin`),
+	- **no Origin header**, and
+	- `Host` restricted to bare localhost (`localhost`, `127.0.0.1`, `[::1]`).
+
+This is what `hostless token create` and local `curl` usage rely on.
 
 ### URL Scheme Handler Contract (`hostless:`)
 
