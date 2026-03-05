@@ -450,7 +450,7 @@ pub fn acquire_daemon_start_lock() -> Result<DaemonStartLock> {
 
 /// Start the hostless daemon process in background mode.
 pub fn start_daemon_process(port: u16) -> Result<()> {
-    start_daemon_process_with_options(port, false, false, false)
+    start_daemon_process_with_options(port, false, false, false, None)
 }
 
 /// Start the hostless daemon process in background mode with explicit serve flags.
@@ -459,6 +459,7 @@ pub fn start_daemon_process_with_options(
     tls: bool,
     dev_mode: bool,
     verbose: bool,
+    token_persistence: Option<&str>,
 ) -> Result<()> {
     let exe = std::env::current_exe()
         .context("Failed to resolve current hostless executable")?;
@@ -474,6 +475,9 @@ pub fn start_daemon_process_with_options(
     }
     if verbose {
         cmd.arg("--verbose");
+    }
+    if let Some(mode) = token_persistence {
+        cmd.arg("--token-persistence").arg(mode);
     }
 
     // Ensure the detached child does not recurse into daemon mode.

@@ -3,6 +3,29 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Bridge token persistence policy.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TokenPersistenceMode {
+    /// Keep bridge tokens in-memory only (default).
+    #[default]
+    Off,
+    /// Persist bridge tokens as plaintext JSON on disk.
+    File,
+    /// Persist bridge tokens encrypted with a key stored in OS keychain.
+    Keychain,
+}
+
+impl TokenPersistenceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::File => "file",
+            Self::Keychain => "keychain",
+        }
+    }
+}
+
 /// Application configuration persisted to ~/.hostless/config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -14,6 +37,9 @@ pub struct AppConfig {
     /// Provider-specific base URL overrides
     #[serde(default)]
     pub provider_urls: HashMap<String, String>,
+    /// Bridge token persistence policy (off/file/keychain).
+    #[serde(default)]
+    pub token_persistence: TokenPersistenceMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +57,7 @@ impl Default for AppConfig {
             allowed_origins: Vec::new(),
             oauth_clients: HashMap::new(),
             provider_urls: HashMap::new(),
+            token_persistence: TokenPersistenceMode::Off,
         }
     }
 }

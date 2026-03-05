@@ -311,3 +311,203 @@ async fn test_top_level_shorthand_run_with_bypass() {
     );
     assert!(stdout.contains("HOSTLESS=0 set"));
 }
+
+#[tokio::test]
+async fn test_config_token_persistence_roundtrip() {
+    let bin = resolve_hostless_bin();
+    let home = create_temp_home_dir();
+
+    let set_file = run_cli(
+        &bin,
+        &home,
+        &["config", "set-token-persistence", "file"],
+    )
+    .await;
+    assert!(
+        set_file.status.success(),
+        "config set-token-persistence file failed: {}",
+        String::from_utf8_lossy(&set_file.stderr)
+    );
+
+    let list_file = run_cli(&bin, &home, &["config", "list"]).await;
+    assert!(
+        list_file.status.success(),
+        "config list after set failed: {}",
+        String::from_utf8_lossy(&list_file.stderr)
+    );
+    let list_file_stdout = String::from_utf8_lossy(&list_file.stdout);
+    assert!(
+        list_file_stdout.contains("token_persistence: file"),
+        "unexpected config list output: {}",
+        list_file_stdout
+    );
+
+    let set_off = run_cli(
+        &bin,
+        &home,
+        &["config", "set-token-persistence", "off"],
+    )
+    .await;
+    assert!(
+        set_off.status.success(),
+        "config set-token-persistence off failed: {}",
+        String::from_utf8_lossy(&set_off.stderr)
+    );
+
+    let list_off = run_cli(&bin, &home, &["config", "list"]).await;
+    assert!(
+        list_off.status.success(),
+        "config list after reset failed: {}",
+        String::from_utf8_lossy(&list_off.stderr)
+    );
+    let list_off_stdout = String::from_utf8_lossy(&list_off.stdout);
+    assert!(
+        list_off_stdout.contains("token_persistence: off"),
+        "unexpected config list output after reset: {}",
+        list_off_stdout
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn test_proxy_start_honors_config_token_persistence_default() {
+    let bin = resolve_hostless_bin();
+    let home = create_temp_home_dir();
+    let daemon_port = find_available_port().unwrap();
+
+    let set_file = run_cli(
+        &bin,
+        &home,
+        &["config", "set-token-persistence", "file"],
+    )
+    .await;
+    assert!(
+        set_file.status.success(),
+        "config set-token-persistence file failed: {}",
+        String::from_utf8_lossy(&set_file.stderr)
+    );
+
+    let start = run_cli(
+        &bin,
+        &home,
+        &["proxy", "start", "--port", &daemon_port.to_string()],
+    )
+    .await;
+    assert!(
+        start.status.success(),
+        "proxy start failed: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    wait_for_health(daemon_port).await;
+
+    let admin_token_path = home.join(".hostless").join("admin.token");
+    let admin_token = std::fs::read_to_string(admin_token_path)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let client = reqwest::Client::new();
+    let create_resp = client
+        .post(format!("http://localhost:{}/auth/token", daemon_port))
+        .header("x-hostless-admin", admin_token)
+        .json(&serde_json::json!({
+            "origin": "*",
+            "name": "proxy-config-default",
+            "ttl": 3600
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        create_resp.status().is_success(),
+        "token create via daemon API failed: {}",
+        create_resp.status()
+    );
+
+    // Give persistence a moment to flush to disk.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let tokens_path = home.join(".hostless").join("tokens.json");
+    assert!(
+        tokens_path.exists(),
+        "expected tokens.json to exist when proxy uses config default 'file' mode"
+    );
+
+    let _ = run_cli(&bin, &home, &["proxy", "stop"]).await;
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn test_proxy_start_cli_override_beats_config_default() {
+    let bin = resolve_hostless_bin();
+    let home = create_temp_home_dir();
+    let daemon_port = find_available_port().unwrap();
+
+    let set_file = run_cli(
+        &bin,
+        &home,
+        &["config", "set-token-persistence", "file"],
+    )
+    .await;
+    assert!(
+        set_file.status.success(),
+        "config set-token-persistence file failed: {}",
+        String::from_utf8_lossy(&set_file.stderr)
+    );
+
+    let start = run_cli(
+        &bin,
+        &home,
+        &[
+            "proxy",
+            "start",
+            "--port",
+            &daemon_port.to_string(),
+            "--token-persistence",
+            "off",
+        ],
+    )
+    .await;
+    assert!(
+        start.status.success(),
+        "proxy start failed: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    wait_for_health(daemon_port).await;
+
+    let admin_token_path = home.join(".hostless").join("admin.token");
+    let admin_token = std::fs::read_to_string(admin_token_path)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let client = reqwest::Client::new();
+    let create_resp = client
+        .post(format!("http://localhost:{}/auth/token", daemon_port))
+        .header("x-hostless-admin", admin_token)
+        .json(&serde_json::json!({
+            "origin": "*",
+            "name": "proxy-cli-override",
+            "ttl": 3600
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        create_resp.status().is_success(),
+        "token create via daemon API failed: {}",
+        create_resp.status()
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let tokens_path = home.join(".hostless").join("tokens.json");
+    assert!(
+        !tokens_path.exists(),
+        "did not expect tokens.json when proxy start override uses 'off' mode"
+    );
+
+    let _ = run_cli(&bin, &home, &["proxy", "stop"]).await;
+    let _ = std::fs::remove_dir_all(&home);
+}

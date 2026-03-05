@@ -4,7 +4,11 @@
 
 ### Bridge Tokens
 
-Tokens are prefixed `sk_local_` and stored in-memory in `BridgeTokenManager` (HashMap behind RwLock). **Tokens are lost on server restart** (persistence not yet implemented).
+Tokens are prefixed `sk_local_` and stored in-memory in `BridgeTokenManager` (HashMap behind RwLock), with optional persistence configured at server start:
+
+- `off` (default): in-memory only, tokens are lost on restart
+- `file`: persisted as plaintext `~/.hostless/tokens.json`
+- `keychain`: persisted in `~/.hostless/tokens.json` encrypted with a key stored in OS keychain
 
 Each token has:
 - **Origin binding**: exact origin match, or `"*"` wildcard (matches any origin including empty)

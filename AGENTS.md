@@ -38,6 +38,7 @@ Top-level commands implemented in `src/main.rs`:
 - `hostless trust`
 - `hostless keys <add|list|remove|migrate> ...`
 - `hostless origins <add|list|remove> ...`
+- `hostless config <list|set-token-persistence> ...`
 - `hostless auth login <provider>`
 - `hostless token <create|list|revoke> ...`
 
@@ -50,6 +51,8 @@ Subcommand details:
 - `origins add <origin>`
 - `origins list`
 - `origins remove <origin>`
+- `config list`
+- `config set-token-persistence <off|file|keychain>`
 - `route list`
 - `route add <name> --port <port> [--daemon-port <port>]`
 - `route remove <name> [--daemon-port <port>]`
@@ -74,6 +77,7 @@ Commands that execute locally (no daemon management API call):
 - `stop` (PID-file + SIGTERM)
 - `keys add|list|remove|migrate` (vault/key storage)
 - `origins add|list|remove` (config file)
+- `config list|set-token-persistence` (config file)
 - `auth login` (OAuth flow initiation)
 - `trust` (OS cert trust commands)
 
@@ -180,7 +184,7 @@ See [docs/testing.md](docs/testing.md) for the full test inventory, test pattern
 
 ## Key Design Decisions
 
-1. **In-memory tokens**: Bridge tokens live in a `HashMap<String, BridgeToken>` behind `RwLock`. Fast but lost on restart. Persistence (encrypted to `~/.hostless/tokens.json`) is planned but not implemented.
+1. **In-memory runtime + optional persistence**: Bridge tokens live in a `HashMap<String, BridgeToken>` behind `RwLock` at runtime. Persistence mode is configurable: `off` (default, lost on restart), `file` (plaintext `~/.hostless/tokens.json`), or `keychain` (encrypted token file using OS keychain-backed key).
 2. **Dev mode opt-in**: `--dev-mode` flag relaxes auth for local development. Without it, ALL requests need tokens.
 3. **OpenAI-compatible API surface**: Clients talk OpenAI format; providers transform internally.
 4. **No remote network in unit tests**: All unit/integration tests are offline. E2e tests are `#[ignore]` and require explicit opt-in.

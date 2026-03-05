@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rand::RngCore;
 
 const SERVICE_NAME: &str = "hostless";
 const ACCOUNT_NAME: &str = "master-key";
@@ -24,9 +25,26 @@ pub fn try_load_existing_master_key() -> Result<Option<[u8; 32]>> {
     }
 }
 
-#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Load existing master key from OS keychain or create/store a new one.
+pub fn load_or_create_master_key() -> Result<[u8; 32]> {
+    if let Some(existing) = try_load_existing_master_key()? {
+        return Ok(existing);
+    }
+
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+
+    let entry = keyring::Entry::new(SERVICE_NAME, ACCOUNT_NAME)
+        .context("Failed to create keychain entry")?;
+    entry
+        .set_password(&hex_encode(&key))
+        .map_err(|e| anyhow::anyhow!("Failed to store master key in keychain: {}", e))?;
+
+    Ok(key)
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {

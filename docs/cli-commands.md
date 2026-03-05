@@ -5,7 +5,7 @@ This reference reflects the command surface implemented in `src/main.rs`.
 ## Top-level commands
 
 ```bash
-hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon]
+hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
 hostless proxy <start|stop> ...
 hostless run [<name>] [--infer-name] [--name <name>] [--worktree-prefix] [--app-port <p>] [--daemon-port <p>] [--providers <csv>] [--models <csv>] [--rate-limit <n>] [--ttl <seconds>] [--no-token] -- <command...>
 hostless <name> <command...>
@@ -19,6 +19,7 @@ hostless hosts <sync|clean>
 hostless trust
 hostless keys <add|list|remove|migrate> ...
 hostless origins <add|list|remove> ...
+hostless config <list|set-token-persistence> ...
 hostless auth login <provider>
 hostless token <create|list|revoke> ...
 ```
@@ -26,7 +27,7 @@ hostless token <create|list|revoke> ...
 ## serve
 
 ```bash
-hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon]
+hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
 ```
 
 | Flag | Description |
@@ -36,6 +37,7 @@ hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon]
 | `--verbose` | Enable verbose logging |
 | `--dev-mode` | Allow unauthenticated bare localhost/no-origin requests |
 | `--daemon` | Run server in background and persist PID/port metadata |
+| `--token-persistence` | Bridge token storage mode: `off` (default), `file` (plaintext), `keychain` (encrypted) |
 
 ## run (portless-clone)
 
@@ -78,12 +80,13 @@ Stops the daemon process tracked in `~/.hostless/hostless.pid`.
 ## proxy (portless-compatible)
 
 ```bash
-hostless proxy start [--port 11434] [--https] [--verbose] [--dev-mode] [--foreground]
+hostless proxy start [--port 11434] [--https] [--verbose] [--dev-mode] [--foreground] [--token-persistence <off|file|keychain>]
 hostless proxy stop
 ```
 
 - `proxy start` defaults to daemon/background mode unless `--foreground` is used.
 - `--https` maps to hostless TLS mode.
+- `--token-persistence` uses the same token storage policy as `hostless serve`.
 
 ## list (portless-compatible)
 
@@ -157,6 +160,16 @@ hostless origins remove <origin>
 ```
 
 Manage explicitly allowed web origins.
+
+## config
+
+```bash
+hostless config list
+hostless config set-token-persistence <off|file|keychain>
+```
+
+- `list`: Show current persisted defaults from `~/.hostless/config.json`
+- `set-token-persistence`: Set default token storage policy used by `serve`/`proxy start` when `--token-persistence` is not provided
 
 ## auth
 

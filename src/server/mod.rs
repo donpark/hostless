@@ -8,7 +8,7 @@ pub mod streaming;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     middleware as axum_middleware,
     routing::{get, post},
@@ -17,7 +17,7 @@ use axum::{
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, TokenPersistenceMode};
 use crate::vault::VaultStore;
 
 /// Shared application state
@@ -43,10 +43,20 @@ impl AppState {
             .unwrap_or(false)
     }
 
-    pub async fn new(port: u16, dev_mode: bool) -> Result<Arc<Self>> {
+    pub async fn new(
+        port: u16,
+        dev_mode: bool,
+        token_persistence_override: Option<TokenPersistenceMode>,
+    ) -> Result<Arc<Self>> {
         let vault = VaultStore::open().await?;
         let config = AppConfig::load()?;
-        let token_manager = auth::bridge_token::BridgeTokenManager::new();
+        let token_persistence = token_persistence_override.unwrap_or(config.token_persistence);
+        if token_persistence == TokenPersistenceMode::File {
+            tracing::warn!(
+                "Bridge token persistence is set to plaintext file mode; use keychain mode for stronger at-rest protection"
+            );
+        }
+        let token_manager = auth::bridge_token::BridgeTokenManager::new_with_persistence(token_persistence);
         let route_table = route_table::RouteTable::new(port);
         let admin_token = auth::admin::load_or_create_admin_token()?;
 
@@ -69,6 +79,23 @@ impl AppState {
         // Load persisted routes from disk (stale PID routes are filtered out)
         if let Err(e) = state.route_table.load_from_disk().await {
             tracing::warn!("Failed to load routes from disk: {}", e);
+        }
+
+        match state.token_manager.load_from_disk().await {
+            Ok(loaded) if loaded > 0 => {
+                tracing::info!(
+                    mode = state.token_manager.persistence_mode().as_str(),
+                    "Loaded {} bridge tokens from disk",
+                    loaded
+                );
+            }
+            Ok(_) => {}
+            Err(e) if state.token_manager.persistence_mode() == TokenPersistenceMode::Keychain => {
+                return Err(e).context("Failed to load bridge tokens in keychain persistence mode");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load bridge tokens from disk: {}", e);
+            }
         }
 
         Ok(state)

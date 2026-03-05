@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::net::SocketAddr;
@@ -14,6 +14,33 @@ mod providers;
 mod server;
 mod tls;
 mod vault;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum TokenPersistenceArg {
+    Off,
+    File,
+    Keychain,
+}
+
+impl TokenPersistenceArg {
+    fn as_cli_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::File => "file",
+            Self::Keychain => "keychain",
+        }
+    }
+}
+
+impl From<TokenPersistenceArg> for config::TokenPersistenceMode {
+    fn from(value: TokenPersistenceArg) -> Self {
+        match value {
+            TokenPersistenceArg::Off => config::TokenPersistenceMode::Off,
+            TokenPersistenceArg::File => config::TokenPersistenceMode::File,
+            TokenPersistenceArg::Keychain => config::TokenPersistenceMode::Keychain,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "hostless", version, about = "Local AI proxy that manages LLM API keys securely")]
@@ -47,6 +74,10 @@ enum Commands {
         /// Run as a background daemon
         #[arg(long)]
         daemon: bool,
+
+        /// Bridge token persistence mode (default from config, fallback: off)
+        #[arg(long, value_enum)]
+        token_persistence: Option<TokenPersistenceArg>,
 
         /// Internal flag used by daemon launcher to avoid re-daemonizing.
         #[arg(long, hide = true)]
@@ -167,6 +198,12 @@ enum Commands {
         action: OriginsAction,
     },
 
+    /// Manage hostless configuration values
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Start OAuth login with a provider
     Auth {
         #[command(subcommand)]
@@ -208,6 +245,10 @@ enum ProxyAction {
         /// Run in foreground (default is daemon/background)
         #[arg(long)]
         foreground: bool,
+
+        /// Bridge token persistence mode (default from config, fallback: off)
+        #[arg(long, value_enum)]
+        token_persistence: Option<TokenPersistenceArg>,
     },
     /// Stop the proxy daemon (portless-compatible)
     Stop,
@@ -323,6 +364,18 @@ enum AuthAction {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current configuration
+    List,
+    /// Set bridge token persistence policy in config.json
+    SetTokenPersistence {
+        /// Persistence mode used by default when serve/proxy start omits --token-persistence
+        #[arg(value_enum)]
+        mode: TokenPersistenceArg,
+    },
+}
+
+#[derive(Subcommand)]
 enum TokenAction {
     /// Create a new bridge token for CLI or app use
     Create {
@@ -371,6 +424,7 @@ async fn main() -> Result<()> {
             verbose,
             dev_mode,
             daemon,
+            token_persistence,
             daemonized,
         } => {
             init_tracing(verbose);
@@ -386,11 +440,22 @@ async fn main() -> Result<()> {
                 // Daemon mode: spawn a detached child process and return.
                 // Avoid forking from inside the Tokio runtime.
                 println!("Starting hostless daemon on port {}...", port);
-                process::manager::start_daemon_process_with_options(port, tls, dev_mode, verbose)?;
+                process::manager::start_daemon_process_with_options(
+                    port,
+                    tls,
+                    dev_mode,
+                    verbose,
+                    token_persistence.map(|v| v.as_cli_value()),
+                )?;
                 return Ok(());
             } else {
                 // Foreground mode (existing behavior)
-                let app_state = server::AppState::new(port, dev_mode).await?;
+                let app_state = server::AppState::new(
+                    port,
+                    dev_mode,
+                    token_persistence.map(Into::into),
+                )
+                .await?;
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
                 // Clean up daemon files on exit
@@ -484,9 +549,19 @@ async fn main() -> Result<()> {
                 verbose,
                 dev_mode,
                 foreground,
+                token_persistence,
             } => {
                 // Portless semantics default to daemon mode unless --foreground is set.
-                handle_serve(port, https, verbose, dev_mode, !foreground, false).await?;
+                handle_serve(
+                    port,
+                    https,
+                    verbose,
+                    dev_mode,
+                    !foreground,
+                    false,
+                    token_persistence.map(Into::into),
+                )
+                .await?;
             }
             ProxyAction::Stop => {
                 handle_stop()?;
@@ -545,6 +620,11 @@ async fn main() -> Result<()> {
         Commands::Origins { action } => {
             init_tracing(false);
             handle_origins(action).await?;
+        }
+
+        Commands::Config { action } => {
+            init_tracing(false);
+            handle_config(action)?;
         }
 
         Commands::Auth { action } => {
@@ -694,6 +774,7 @@ async fn handle_serve(
     dev_mode: bool,
     daemon: bool,
     daemonized: bool,
+    token_persistence: Option<config::TokenPersistenceMode>,
 ) -> Result<()> {
     init_tracing(verbose);
     if dev_mode {
@@ -705,11 +786,17 @@ async fn handle_serve(
 
     if daemon && !daemonized {
         println!("Starting hostless daemon on port {}...", port);
-        process::manager::start_daemon_process_with_options(port, tls, dev_mode, verbose)?;
+        process::manager::start_daemon_process_with_options(
+            port,
+            tls,
+            dev_mode,
+            verbose,
+            token_persistence.map(|m| m.as_str()),
+        )?;
         return Ok(());
     }
 
-    let app_state = server::AppState::new(port, dev_mode).await?;
+    let app_state = server::AppState::new(port, dev_mode, token_persistence).await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     let _cleanup_guard = DaemonCleanupGuard;
@@ -974,6 +1061,30 @@ async fn handle_auth(action: AuthAction) -> Result<()> {
     match action {
         AuthAction::Login { provider } => {
             auth::oauth::start_oauth_login(&provider).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_config(action: ConfigAction) -> Result<()> {
+    let mut cfg = config::AppConfig::load()?;
+
+    match action {
+        ConfigAction::List => {
+            println!("Current configuration:");
+            println!("  token_persistence: {}", cfg.token_persistence.as_str());
+        }
+        ConfigAction::SetTokenPersistence { mode } => {
+            cfg.token_persistence = mode.into();
+            cfg.save()?;
+            println!(
+                "✓ Set token persistence default to '{}'",
+                cfg.token_persistence.as_str()
+            );
+            println!(
+                "  This applies to future 'hostless serve' and 'hostless proxy start' runs unless overridden with --token-persistence."
+            );
         }
     }
 

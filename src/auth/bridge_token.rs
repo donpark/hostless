@@ -1,10 +1,38 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+use crate::config::TokenPersistenceMode;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedToken {
+    token: String,
+    origin: String,
+    app_name: Option<String>,
+    expires_at_unix: u64,
+    allowed_models: Option<Vec<String>>,
+    allowed_providers: Option<Vec<String>>,
+    rate_limit_per_hour: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedTokenFile {
+    version: u8,
+    tokens: Vec<PersistedToken>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedPersistedTokenFile {
+    version: u8,
+    encrypted: bool,
+    data: String,
+}
 
 /// Information about an issued bridge token
 #[derive(Debug, Clone)]
@@ -75,14 +103,187 @@ impl RateLimit {
 #[allow(dead_code)]
 pub struct BridgeTokenManager {
     tokens: RwLock<HashMap<String, BridgeToken>>,
+    persistence_mode: TokenPersistenceMode,
 }
 
 #[allow(dead_code)]
 impl BridgeTokenManager {
     pub fn new() -> Self {
+        Self::new_with_persistence(TokenPersistenceMode::Off)
+    }
+
+    pub fn new_with_persistence(persistence_mode: TokenPersistenceMode) -> Self {
         Self {
             tokens: RwLock::new(HashMap::new()),
+            persistence_mode,
         }
+    }
+
+    pub fn persistence_mode(&self) -> TokenPersistenceMode {
+        self.persistence_mode
+    }
+
+    fn persistence_path(&self) -> Result<PathBuf> {
+        let dir = crate::config::AppConfig::config_dir()?;
+        Ok(dir.join("tokens.json"))
+    }
+
+    fn expires_at_to_unix(expires_at: Instant) -> u64 {
+        let now_instant = Instant::now();
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let remaining = expires_at
+            .checked_duration_since(now_instant)
+            .unwrap_or_default()
+            .as_secs();
+        now_unix.saturating_add(remaining)
+    }
+
+    fn unix_to_expires_at(expires_at_unix: u64) -> Option<Instant> {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if expires_at_unix <= now_unix {
+            return None;
+        }
+        let remaining = expires_at_unix.saturating_sub(now_unix);
+        Some(Instant::now() + Duration::from_secs(remaining))
+    }
+
+    fn to_persisted_file(tokens: &HashMap<String, BridgeToken>) -> PersistedTokenFile {
+        let mut items = Vec::with_capacity(tokens.len());
+        for token in tokens.values() {
+            items.push(PersistedToken {
+                token: token.token.clone(),
+                origin: token.origin.clone(),
+                app_name: token.app_name.clone(),
+                expires_at_unix: Self::expires_at_to_unix(token.expires_at),
+                allowed_models: token.allowed_models.clone(),
+                allowed_providers: token.allowed_providers.clone(),
+                rate_limit_per_hour: token.rate_limit.as_ref().map(|r| r.max_requests),
+            });
+        }
+        PersistedTokenFile {
+            version: 1,
+            tokens: items,
+        }
+    }
+
+    fn write_persisted_file(path: &PathBuf, payload: &str) -> Result<()> {
+        use fs2::FileExt;
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .context("Failed to open tokens file")?;
+        file.lock_exclusive()
+            .context("Failed to lock tokens file")?;
+        std::fs::write(path, payload).context("Failed to write tokens file")?;
+        file.unlock().context("Failed to unlock tokens file")?;
+        Ok(())
+    }
+
+    fn persist_tokens_snapshot(&self, tokens: &HashMap<String, BridgeToken>) -> Result<()> {
+        match self.persistence_mode {
+            TokenPersistenceMode::Off => Ok(()),
+            TokenPersistenceMode::File => {
+                let path = self.persistence_path()?;
+                let payload = serde_json::to_string_pretty(&Self::to_persisted_file(tokens))
+                    .context("Failed to serialize tokens")?;
+                Self::write_persisted_file(&path, &payload)
+            }
+            TokenPersistenceMode::Keychain => {
+                let path = self.persistence_path()?;
+                let plaintext = serde_json::to_vec(&Self::to_persisted_file(tokens))
+                    .context("Failed to serialize tokens")?;
+                let key = crate::vault::keychain::load_or_create_master_key()
+                    .context("Failed to load keychain master key")?;
+                let encrypted = crate::vault::encryption::encrypt(&key, &plaintext)
+                    .context("Failed to encrypt token store")?;
+                let wrapped = EncryptedPersistedTokenFile {
+                    version: 1,
+                    encrypted: true,
+                    data: encrypted,
+                };
+                let payload = serde_json::to_string_pretty(&wrapped)
+                    .context("Failed to serialize encrypted token store")?;
+                Self::write_persisted_file(&path, &payload)
+            }
+        }
+    }
+
+    async fn persist_if_enabled(&self) {
+        if self.persistence_mode == TokenPersistenceMode::Off {
+            return;
+        }
+        let tokens = self.tokens.read().await;
+        if let Err(e) = self.persist_tokens_snapshot(&tokens) {
+            warn!(error = %e, "Failed to persist bridge tokens");
+        }
+    }
+
+    /// Load persisted tokens into memory. Expired tokens are ignored.
+    pub async fn load_from_disk(&self) -> Result<usize> {
+        if self.persistence_mode == TokenPersistenceMode::Off {
+            return Ok(0);
+        }
+
+        let path = self.persistence_path()?;
+        if !path.exists() {
+            return Ok(0);
+        }
+
+        let raw = std::fs::read_to_string(&path).context("Failed to read tokens file")?;
+        let parsed = match self.persistence_mode {
+            TokenPersistenceMode::File => serde_json::from_str::<PersistedTokenFile>(&raw)
+                .context("Failed to parse tokens file")?,
+            TokenPersistenceMode::Keychain => {
+                let wrapped = serde_json::from_str::<EncryptedPersistedTokenFile>(&raw)
+                    .context("Failed to parse encrypted token store")?;
+                if !wrapped.encrypted {
+                    anyhow::bail!("Encrypted token store expected but plaintext data was found");
+                }
+                let key = crate::vault::keychain::load_or_create_master_key()
+                    .context("Failed to load keychain master key")?;
+                let decrypted = crate::vault::encryption::decrypt(&key, &wrapped.data)
+                    .context("Failed to decrypt token store")?;
+                serde_json::from_slice::<PersistedTokenFile>(&decrypted)
+                    .context("Failed to parse decrypted token store")?
+            }
+            TokenPersistenceMode::Off => unreachable!("handled above"),
+        };
+
+        let mut loaded = 0usize;
+        let mut tokens = self.tokens.write().await;
+        tokens.clear();
+
+        for persisted in parsed.tokens {
+            let Some(expires_at) = Self::unix_to_expires_at(persisted.expires_at_unix) else {
+                continue;
+            };
+            let now = Instant::now();
+            let token = BridgeToken {
+                token: persisted.token.clone(),
+                origin: persisted.origin,
+                created_at: now,
+                expires_at,
+                allowed_models: persisted.allowed_models,
+                allowed_providers: persisted.allowed_providers,
+                rate_limit: persisted
+                    .rate_limit_per_hour
+                    .map(|max| RateLimit::new(max, Duration::from_secs(3600))),
+                app_name: persisted.app_name,
+            };
+            tokens.insert(persisted.token, token);
+            loaded += 1;
+        }
+
+        Ok(loaded)
     }
 
     /// Issue a new bridge token for an origin.
@@ -127,6 +328,9 @@ impl BridgeTokenManager {
 
         let mut tokens = self.tokens.write().await;
         tokens.insert(token_string.clone(), bridge_token.clone());
+        drop(tokens);
+
+        self.persist_if_enabled().await;
 
         info!(origin = origin, "Issued bridge token (expires in {}s)", ttl.as_secs());
         bridge_token
@@ -273,6 +477,9 @@ impl BridgeTokenManager {
         let bridge_token = tokens.get_mut(token).ok_or(TokenError::NotFound)?;
 
         bridge_token.expires_at = Instant::now() + new_ttl;
+        drop(tokens);
+
+        self.persist_if_enabled().await;
         info!("Refreshed bridge token (new TTL: {}s)", new_ttl.as_secs());
         Ok(())
     }
@@ -280,7 +487,12 @@ impl BridgeTokenManager {
     /// Revoke a token
     pub async fn revoke(&self, token: &str) {
         let mut tokens = self.tokens.write().await;
-        tokens.remove(token);
+        let removed = tokens.remove(token);
+        drop(tokens);
+
+        if removed.is_some() {
+            self.persist_if_enabled().await;
+        }
         info!("Revoked bridge token");
     }
 
@@ -290,7 +502,14 @@ impl BridgeTokenManager {
         let before = tokens.len();
         let now = Instant::now();
         tokens.retain(|_, t| t.expires_at > now);
-        before - tokens.len()
+        let removed = before - tokens.len();
+        drop(tokens);
+
+        if removed > 0 {
+            self.persist_if_enabled().await;
+        }
+
+        removed
     }
 }
 
