@@ -11,6 +11,19 @@ Hostless is a local AI proxy and local reverse proxy.
 - Provides origin-scoped bridge tokens (`sk_local_*`) instead of raw provider keys.
 - Lets local apps run under unique origins like `myapp.localhost:11434`.
 
+## What It Implements
+
+- OpenAI-compatible Chat Completions: `POST /v1/chat/completions`
+- OpenAI-compatible Responses API (HTTP + SSE): `POST /v1/responses`
+- OpenAI-compatible Responses API (WebSocket): `ws://localhost:11434/v1/responses?model=...`
+- OpenAI-compatible Realtime API (WebSocket): `ws://localhost:11434/v1/realtime?model=...`
+- OpenAI-compatible media passthrough: `POST /v1/audio/speech`
+- OpenAI-compatible media passthrough: `POST /v1/audio/transcriptions`
+- OpenAI-compatible media passthrough: `POST /v1/audio/translations`
+- OpenAI-compatible media passthrough: `POST /v1/images/generations`
+- OpenAI-compatible media passthrough: `POST /v1/files`
+
+
 ## Quick Start
 
 ```bash
