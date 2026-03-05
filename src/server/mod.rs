@@ -145,7 +145,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     let api_routes = Router::new()
         .route("/v1/chat/completions", post(routes::chat_completions))
-        .route("/v1/responses", post(routes::responses))
+        .route(
+            "/v1/responses",
+            post(routes::responses).get(routes::responses_websocket),
+        )
         .route("/v1/realtime", get(routes::realtime))
         .route("/v1/audio/speech", post(routes::audio_speech))
         .route("/v1/audio/transcriptions", post(routes::audio_transcriptions))

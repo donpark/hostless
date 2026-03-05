@@ -740,6 +740,253 @@ pub async fn responses(
     }
 }
 
+// ─── Responses API WebSocket Mode ────────────────────────
+
+pub async fn responses_websocket(
+    State(state): State<Arc<AppState>>,
+    mut req: axum::extract::Request,
+) -> Response {
+    let is_upgrade = req
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+
+    if !is_upgrade {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": "'/v1/responses' websocket mode requires a WebSocket upgrade request",
+                    "type": "invalid_request_error",
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let validated_token = req.extensions().get::<ValidatedToken>().cloned();
+    let model = match query_param(req.uri(), "model") {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "message": "'/v1/responses' websocket mode requires a '?model=...' query parameter for pre-upgrade scope enforcement.",
+                        "type": "invalid_request_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let (provider_key, _) = providers::resolve_provider(&model);
+    if provider_key != "openai" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": "'/v1/responses' websocket mode currently supports OpenAI-compatible models only.",
+                    "type": "invalid_request_error",
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    if let Some(ref vt) = validated_token {
+        if let Err(e) = state.token_manager.validate_provider(&vt.0, "openai").await {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": {
+                        "message": format!("{}", e),
+                        "type": "scope_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if let Err(e) = state.token_manager.validate_model(&vt.0, &model).await {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": {
+                        "message": format!("{}", e),
+                        "type": "scope_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let (api_key, custom_base_url) = match state.vault.get_key("openai").await {
+        Ok(Some(pair)) => pair,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "message": "No API key configured for provider 'openai'. Use 'hostless keys add openai <key>' to add one.",
+                        "type": "configuration_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to retrieve API key: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": {
+                        "message": "Failed to retrieve API key from vault",
+                        "type": "internal_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let base_url = custom_base_url
+        .as_deref()
+        .unwrap_or("https://api.openai.com");
+    let upstream_base = realtime_upstream_base(base_url);
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/v1/responses");
+
+    let upstream_uri: Uri = match format!("{}{}", upstream_base, path_and_query).parse() {
+        Ok(uri) => uri,
+        Err(e) => {
+            warn!(error = %e, "Rejected malformed responses websocket upstream URI");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "message": "Malformed responses websocket request URI",
+                        "type": "invalid_request_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let client_on_upgrade = hyper::upgrade::on(&mut req);
+    let (parts, body) = req.into_parts();
+    let mut headers = parts.headers.clone();
+
+    headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key))
+            .unwrap_or_else(|_| HeaderValue::from_static("")),
+    );
+
+    if let Some(authority) = upstream_uri.authority() {
+        if let Ok(host) = HeaderValue::from_str(authority.as_str()) {
+            headers.insert(header::HOST, host);
+        }
+    }
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let https = match hyper_rustls::HttpsConnectorBuilder::new().with_native_roots() {
+        Ok(builder) => builder
+            .https_or_http()
+            .enable_http1()
+            .build(),
+        Err(e) => {
+            error!(error = %e, "Failed to initialize TLS roots for responses websocket proxy");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let client: Client<_, Body> = Client::builder(TokioExecutor::new()).build(https);
+
+    let mut upstream_req = axum::http::Request::builder()
+        .method(parts.method)
+        .uri(upstream_uri);
+    if let Some(h) = upstream_req.headers_mut() {
+        *h = headers;
+    }
+
+    let upstream_req = match upstream_req.body(body) {
+        Ok(req) => req,
+        Err(e) => {
+            error!(error = %e, "Failed to build responses websocket upstream request");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut upstream_resp = match client.request(upstream_req).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!(error = %e, "Responses websocket upstream request failed");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "message": "Failed to reach upstream responses websocket endpoint",
+                        "type": "upstream_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if upstream_resp.status() != StatusCode::SWITCHING_PROTOCOLS {
+        warn!(status = upstream_resp.status().as_u16(), "Responses websocket upstream rejected upgrade");
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "message": "Upstream rejected responses websocket upgrade",
+                    "type": "upstream_error",
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let upstream_on_upgrade = hyper::upgrade::on(&mut upstream_resp);
+    let upstream_headers = upstream_resp.headers().clone();
+
+    tokio::spawn(async move {
+        let upgraded = tokio::try_join!(client_on_upgrade, upstream_on_upgrade);
+        let (client_ws, upstream_ws) = match upgraded {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(error = %e, "Responses websocket upgrade failed");
+                return;
+            }
+        };
+
+        let mut client_ws = TokioIo::new(client_ws);
+        let mut upstream_ws = TokioIo::new(upstream_ws);
+
+        if let Err(e) = copy_bidirectional(&mut client_ws, &mut upstream_ws).await {
+            warn!(error = %e, "Responses websocket proxy stream closed with error");
+        }
+    });
+
+    let mut response = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+    if let Some(resp_headers) = response.headers_mut() {
+        *resp_headers = upstream_headers;
+    }
+    response
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 // ─── Realtime API (WebSocket upgrade passthrough) ─────────
 
 pub async fn realtime(

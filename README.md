@@ -43,6 +43,132 @@ curl -X POST http://localhost:11434/v1/responses \
   -d '{"model":"gpt-4o-mini","input":"hello"}'
 ```
 
+Responses WebSocket mode through hostless:
+
+```javascript
+// npm i ws
+import WebSocket from "ws";
+
+const token = process.env.HOSTLESS_TOKEN; // sk_local_...
+const ws = new WebSocket("ws://localhost:11434/v1/responses?model=gpt-4o-mini", {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+});
+
+let lastResponseId = null;
+
+ws.on("open", () => {
+  ws.send(
+    JSON.stringify({
+      type: "response.create",
+      model: "gpt-4o-mini",
+      store: false,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Find fizz_buzz()" }],
+        },
+      ],
+      tools: [],
+    }),
+  );
+});
+
+ws.on("message", (raw) => {
+  const event = JSON.parse(raw.toString());
+  if (event.type === "response.completed" && event.response?.id) {
+    lastResponseId = event.response.id;
+
+    // Chain the next turn with only incremental input.
+    ws.send(
+      JSON.stringify({
+        type: "response.create",
+        model: "gpt-4o-mini",
+        store: false,
+        previous_response_id: lastResponseId,
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Now optimize it." }],
+          },
+        ],
+        tools: [],
+      }),
+    );
+  }
+});
+```
+
+```python
+# pip install websocket-client
+import json
+import os
+from websocket import create_connection
+
+token = os.environ["HOSTLESS_TOKEN"]  # sk_local_...
+ws = create_connection(
+    "ws://localhost:11434/v1/responses?model=gpt-4o-mini",
+    header=[f"Authorization: Bearer {token}"],
+)
+
+# First turn
+ws.send(
+    json.dumps(
+        {
+            "type": "response.create",
+            "model": "gpt-4o-mini",
+            "store": False,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Find fizz_buzz()"}],
+                }
+            ],
+            "tools": [],
+        }
+    )
+)
+
+previous_response_id = None
+while True:
+    event = json.loads(ws.recv())
+    if event.get("type") == "response.completed":
+        previous_response_id = event.get("response", {}).get("id")
+        break
+
+# Chained second turn
+ws.send(
+    json.dumps(
+        {
+            "type": "response.create",
+            "model": "gpt-4o-mini",
+            "store": False,
+            "previous_response_id": previous_response_id,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Now optimize it."}],
+                }
+            ],
+            "tools": [],
+        }
+    )
+)
+```
+
+WebSocket mode troubleshooting:
+
+- `401` / authentication errors: Ensure `Authorization: Bearer sk_local_...` is set on the websocket handshake.
+- `403` / scope errors: Token provider/model scope may block the request. Reissue a token with `openai` provider access and compatible model scope.
+- `400 previous_response_not_found`: If using `store=false`, a reconnect may lose continuation state. Start a new chain or resend full context.
+- `502` from hostless: Upstream websocket upgrade was rejected or unreachable. Verify OpenAI key, base URL overrides, and network egress.
+- Long-lived sessions: Reconnect before/at the upstream connection lifetime limit and continue with `previous_response_id` when available.
+
 ## Command Surface
 
 Top-level commands are documented in `docs/cli-commands.md`.
@@ -70,6 +196,7 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - Token persistence modes: `off` (default), `file`, `keychain`.
 - `/v1/chat/completions` and `/v1/responses` are supported on the local API plane.
 - `/v1/responses` currently supports OpenAI-compatible models only.
+- `/v1/responses` supports HTTP mode and WebSocket mode (`ws://localhost:11434/v1/responses?model=gpt-4o-mini`).
 - `/v1/realtime` websocket proxying is supported for OpenAI-compatible realtime models.
 - Media passthrough is supported for OpenAI-compatible endpoints: `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
 - SSE streaming is supported; `/v1/responses` stream events are passed through without event-name rewriting.

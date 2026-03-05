@@ -1331,6 +1331,125 @@ async fn test_realtime_websocket_rejects_model_scope_violation() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/// /v1/responses websocket mode proxies bidirectional frames with strict auth enabled.
+#[tokio::test]
+async fn test_responses_websocket_mode_roundtrip_with_token() {
+    let (ws_backend_addr, _ws_handle) = spawn_ws_echo_backend().await;
+
+    let (state, router) = create_test_app_with_dev_mode(0, false);
+    let (hostless_port, _server_handle) = start_router_server(router).await;
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", ws_backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let token = state
+        .token_manager
+        .issue_full(
+            "http://localhost:11434",
+            std::time::Duration::from_secs(3600),
+            None,
+            Some(vec!["openai".to_string()]),
+            None,
+            Some("responses-ws-test".to_string()),
+        )
+        .await;
+
+    let mut req = format!(
+        "ws://127.0.0.1:{}/v1/responses?model=gpt-4o-mini",
+        hostless_port
+    )
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        "Host",
+        format!("localhost:{}", hostless_port).parse().unwrap(),
+    );
+    req.headers_mut()
+        .insert("Origin", "http://localhost:11434".parse().unwrap());
+    req.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", token.token).parse().unwrap(),
+    );
+
+    let (mut client_ws, _resp): (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        _,
+    ) = tokio_tungstenite::connect_async(req).await.unwrap();
+
+    client_ws
+        .send(Message::Text("response.create".into()))
+        .await
+        .unwrap();
+
+    let echoed = client_ws.next().await.unwrap().unwrap();
+    assert_eq!(echoed, Message::Text("response.create".into()));
+}
+
+/// /v1/responses websocket mode rejects provider scope violations pre-upgrade.
+#[tokio::test]
+async fn test_responses_websocket_mode_rejects_provider_scope() {
+    let (ws_backend_addr, _ws_handle) = spawn_ws_echo_backend().await;
+
+    let (state, router) = create_test_app_with_dev_mode(0, false);
+    let (hostless_port, _server_handle) = start_router_server(router).await;
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", ws_backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let token = state
+        .token_manager
+        .issue_full(
+            "http://localhost:11434",
+            std::time::Duration::from_secs(3600),
+            None,
+            Some(vec!["anthropic".to_string()]),
+            None,
+            Some("responses-ws-scope-test".to_string()),
+        )
+        .await;
+
+    let mut req = format!(
+        "ws://127.0.0.1:{}/v1/responses?model=gpt-4o-mini",
+        hostless_port
+    )
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        "Host",
+        format!("localhost:{}", hostless_port).parse().unwrap(),
+    );
+    req.headers_mut()
+        .insert("Origin", "http://localhost:11434".parse().unwrap());
+    req.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", token.token).parse().unwrap(),
+    );
+
+    let err = tokio_tungstenite::connect_async(req).await.unwrap_err();
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("expected HTTP rejection, got: {}", other),
+    };
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Route Management API Tests (from routes.test.ts)
 // ═══════════════════════════════════════════════════════════════════

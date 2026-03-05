@@ -31,8 +31,10 @@ fn resolve_hostless_bin() -> PathBuf {
 }
 
 async fn run_cli(bin: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    let config_dir = home.join(".hostless");
     tokio::process::Command::new(bin)
         .env("HOME", home)
+        .env("HOSTLESS_CONFIG_DIR", &config_dir)
         .args(args)
         .output()
         .await
@@ -45,8 +47,11 @@ async fn run_cli_with_env(
     args: &[&str],
     extra_env: &[(&str, &str)],
 ) -> std::process::Output {
+    let config_dir = home.join(".hostless");
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.env("HOME", home).args(args);
+    cmd.env("HOME", home)
+        .env("HOSTLESS_CONFIG_DIR", &config_dir)
+        .args(args);
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
@@ -55,7 +60,7 @@ async fn run_cli_with_env(
 
 async fn wait_for_health(port: u16) {
     let client = reqwest::Client::new();
-    for _ in 0..50 {
+    for _ in 0..150 {
         if let Ok(resp) = client.get(format!("http://localhost:{}/health", port)).send().await {
             if resp.status().is_success() {
                 return;
@@ -64,6 +69,17 @@ async fn wait_for_health(port: u16) {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("daemon did not become healthy on port {}", port);
+}
+
+async fn wait_for_file(path: &Path, timeout_ms: u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    while std::time::Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("timed out waiting for file: {}", path.display());
 }
 
 /// Concurrent `hostless run` invocations on the same daemon port should both succeed,
@@ -402,6 +418,7 @@ async fn test_proxy_start_honors_config_token_persistence_default() {
     wait_for_health(daemon_port).await;
 
     let admin_token_path = home.join(".hostless").join("admin.token");
+    wait_for_file(&admin_token_path, 5_000).await;
     let admin_token = std::fs::read_to_string(admin_token_path)
         .unwrap()
         .trim()
@@ -477,6 +494,7 @@ async fn test_proxy_start_cli_override_beats_config_default() {
     wait_for_health(daemon_port).await;
 
     let admin_token_path = home.join(".hostless").join("admin.token");
+    wait_for_file(&admin_token_path, 5_000).await;
     let admin_token = std::fs::read_to_string(admin_token_path)
         .unwrap()
         .trim()

@@ -73,7 +73,7 @@ Model name determines the upstream provider:
 
 Current endpoint support:
 - `/v1/chat/completions`: OpenAI-compatible request surface, transformed for Anthropic/Google when needed.
-- `/v1/responses`: OpenAI-compatible passthrough route (OpenAI provider only for now).
+- `/v1/responses`: OpenAI-compatible passthrough route (OpenAI provider only for now), with both HTTP and WebSocket mode support.
 - `/v1/realtime`: OpenAI-compatible websocket upgrade passthrough with pre-upgrade provider/model scope checks.
 - Media passthrough routes (OpenAI-compatible): `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
 
@@ -82,7 +82,7 @@ Current endpoint support:
 | Endpoint | Milestone | Request Type | Transport | Provider Coverage | Scope Enforcement |
 |---|---|---|---|---|---|
 | `/v1/chat/completions` | baseline | JSON | HTTP | OpenAI + Anthropic + Google (via transforms) | Provider + model |
-| `/v1/responses` | M1 | JSON/SSE | HTTP + SSE | OpenAI-compatible only | Provider + model |
+| `/v1/responses` | M1 | JSON/SSE (HTTP), event frames (WebSocket mode) | HTTP + SSE + WebSocket | OpenAI-compatible only | Provider + model (WebSocket mode requires `?model=...`) |
 | `/v1/realtime` | M2 | WebSocket upgrade | WebSocket | OpenAI-compatible only | Provider + model (pre-upgrade) |
 | `/v1/audio/speech` | M3 | JSON | HTTP (binary response passthrough) | OpenAI-compatible only | Provider + model (from JSON `model`) |
 | `/v1/audio/transcriptions` | M3 | Multipart | HTTP | OpenAI-compatible only | Provider |
@@ -94,6 +94,14 @@ Notes:
 - All `/v1/*` routes are behind the same auth middleware.
 - In `--dev-mode`, bare localhost and empty-origin requests bypass token auth, so route-level scope checks apply only when a validated token is present.
 - For multipart routes, model-level scope is not currently extracted from body parts.
+
+### WebSocket Mode Troubleshooting
+
+- `401` / authentication errors: Ensure websocket handshakes include `Authorization: Bearer sk_local_...`.
+- `403` / scope errors: Token provider/model scope may block the route. Reissue a token allowing `openai` and the target model pattern.
+- `400 previous_response_not_found`: With `store=false`, continuation state may not survive reconnects. Start a new chain or resend full context.
+- `502` from hostless: Upstream websocket upgrade was rejected or unreachable. Verify OpenAI key, optional base URL override, and outbound network access.
+- Long-lived chains: Reconnect before/at upstream connection lifetime limits and continue with `previous_response_id` when available.
 
 Media route scope details:
 - Provider scope enforcement is applied to all media routes.

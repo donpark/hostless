@@ -935,7 +935,7 @@ async fn ensure_daemon_ready_for_run(app_name: &str, daemon_port: u16) -> Result
         .err()
         .map(|e| e.to_string());
 
-    let max_wait = Duration::from_secs(5);
+    let max_wait = Duration::from_secs(15);
     let begin = Instant::now();
     let mut attempt: u32 = 0;
     let mut delay = Duration::from_millis(100);
@@ -972,7 +972,7 @@ async fn ensure_daemon_ready_for_run(app_name: &str, daemon_port: u16) -> Result
     );
 
     anyhow::bail!(
-        "Hostless daemon failed to start on port {} within 5s. \
+        "Hostless daemon failed to start on port {} within 15s. \
 Start it manually with:\n  hostless serve --daemon --port {}{}",
         daemon_port,
         daemon_port,

@@ -193,8 +193,7 @@ pub async fn reverse_proxy(
     }
 }
 
-/// WebSocket upgrade handling is intentionally disabled until full hyper
-/// on_upgrade support is implemented.
+/// Proxy WebSocket upgrades for reverse-proxied local apps.
 async fn handle_websocket_upgrade(
     target_port: u16,
     hops: u32,
