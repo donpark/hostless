@@ -3,9 +3,4 @@
 # opensrc - source code for packages
 opensrc/
 
-# siblings
-app/
-test-web/
-test-cli/
-
 hostless

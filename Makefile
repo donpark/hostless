@@ -105,7 +105,7 @@ keys-migrate: build
 	$(BIN_DEBUG) keys migrate
 
 test-web:
-	cd ../test-web && python3 -m http.server $(WEB_PORT)
+	python3 -m http.server $(WEB_PORT) -d ./test-web
 
 test-web-wrapped: build
 	@if ! curl -fsS "http://localhost:$(PORT)/health" >/dev/null 2>&1; then \
@@ -128,7 +128,7 @@ test-web-wrapped: build
 		sleep 0.5; \
 	fi
 	@"$(CURDIR)/target/debug/hostless" route remove test-web --daemon-port $(PORT) >/dev/null 2>&1 || true
-	cd ../test-web && "$(CURDIR)/target/debug/hostless" run test-web --port $(WEB_PORT) --daemon-port $(PORT) -- python3 -m http.server $(WEB_PORT)
+	"$(CURDIR)/target/debug/hostless" run test-web --port $(WEB_PORT) --daemon-port $(PORT) -- python3 -m http.server $(WEB_PORT) -d ./test-web
 
 test-web-status:
 	@echo "=== Hostless health (port $(PORT)) ==="

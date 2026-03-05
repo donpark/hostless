@@ -116,13 +116,6 @@ Critical testing rule:
 
 See `docs/testing.md` for full patterns and fixture guidance.
 
-## Related Repos (Context Only)
-
-- `../app`: sibling app repo that consumes hostless
-- `../test-web`: sibling test web page used in local integration workflows
-
-Hostless docs in this repo should remain focused on hostless behavior/contracts rather than app-side implementation details.
-
 <!-- opensrc:start -->
 
 ## Source Code Reference

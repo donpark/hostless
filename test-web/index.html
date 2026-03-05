@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hostless Unified Flow Chat Demo</title>
+    <style>
+      :root {
+        --bg: #f6f3ec;
+        --surface: #fffcf7;
+        --ink: #132029;
+        --muted: #41525f;
+        --line: #d5cec1;
+        --accent: #0b7a75;
+        --accent-2: #c55f2a;
+        --ok: #18673e;
+        --warn: #8f4f00;
+        --shadow: 0 12px 30px rgba(13, 36, 56, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI Variable", "Trebuchet MS", sans-serif;
+        background:
+          radial-gradient(55rem 35rem at 88% -10%, rgba(11, 122, 117, 0.2), transparent 60%),
+          radial-gradient(45rem 25rem at -5% 105%, rgba(197, 95, 42, 0.2), transparent 58%),
+          var(--bg);
+      }
+
+      main {
+        width: min(1100px, 100% - 2rem);
+        margin: 1.4rem auto 2rem;
+      }
+
+      .hero {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(130deg, rgba(11, 122, 117, 0.08), rgba(255, 255, 255, 0.88));
+        box-shadow: var(--shadow);
+        padding: 1.2rem 1.2rem 1rem;
+        animation: rise 380ms ease-out;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.5rem, 3.6vw, 2.25rem);
+        line-height: 1.1;
+      }
+
+      .hero p {
+        margin: 0.65rem 0 0;
+        color: var(--muted);
+        max-width: 75ch;
+      }
+
+      .chips {
+        margin-top: 0.85rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .chip {
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 252, 247, 0.88);
+        padding: 0.35rem 0.7rem;
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+      }
+
+      .chip.mode {
+        border-color: rgba(11, 122, 117, 0.4);
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      .layout {
+        margin-top: 1rem;
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: 1fr;
+      }
+
+      @media (min-width: 930px) {
+        .layout {
+          grid-template-columns: 330px 1fr;
+        }
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--surface) 94%, #ffffff 6%);
+        box-shadow: var(--shadow);
+        padding: 1rem;
+      }
+
+      .card h2 {
+        margin: 0 0 0.7rem;
+        font-size: 0.98rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .stack {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .status {
+        margin: 0 0 0.8rem;
+        padding: 0.45rem 0.6rem;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        border: 1px solid var(--line);
+      }
+
+      .status.ok {
+        color: var(--ok);
+        border-color: color-mix(in srgb, var(--ok) 35%, #ffffff 65%);
+        background: color-mix(in srgb, var(--ok) 8%, #ffffff 92%);
+      }
+
+      .status.warn {
+        color: var(--warn);
+        border-color: color-mix(in srgb, var(--warn) 35%, #ffffff 65%);
+        background: color-mix(in srgb, var(--warn) 9%, #ffffff 91%);
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      button {
+        font: inherit;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        padding: 0.58rem 0.8rem;
+        cursor: pointer;
+        transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      button.primary {
+        background: var(--ink);
+        color: #f9fbff;
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--muted);
+        border-color: var(--line);
+      }
+
+      button[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .meta {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
+      .meta code {
+        background: #f2ece0;
+        border-radius: 6px;
+        padding: 0.1rem 0.32rem;
+      }
+
+      .diag {
+        margin: 0;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        padding: 0.7rem;
+        background: #f9f5ed;
+        font-family: "IBM Plex Mono", "Menlo", monospace;
+        font-size: 0.79rem;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .chat-shell {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 0.8rem;
+        min-height: 60vh;
+      }
+
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.8rem;
+      }
+
+      .topline label {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      select {
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fffdf8;
+        padding: 0.45rem 0.6rem;
+      }
+
+      .messages {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0.8rem;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(248, 243, 233, 0.9));
+        overflow: auto;
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .empty {
+        margin: 1rem auto;
+        text-align: center;
+        color: var(--muted);
+        max-width: 45ch;
+      }
+
+      .message {
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        padding: 0.64rem 0.72rem;
+        animation: rise 220ms ease-out;
+      }
+
+      .message.user {
+        background: #f2ebe0;
+        border-left: 4px solid var(--accent-2);
+      }
+
+      .message.assistant {
+        background: #ecf6f4;
+        border-left: 4px solid var(--accent);
+      }
+
+      .message-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 0.35rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .message p {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+
+      .composer {
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 90px;
+        resize: vertical;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        padding: 0.7rem;
+        font: inherit;
+        background: #fffdf8;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .error {
+        min-height: 1.15rem;
+        color: #a32119;
+        font-size: 0.86rem;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <h1>Hostless Unified Flow Chat Demo</h1>
+        <p>
+          One app to validate both hostless use-cases: BYOK web apps using bridge tokens and
+          local development on isolated <code>.localhost</code> subdomains.
+        </p>
+        <div class="chips">
+          <span class="chip mode" id="flow-chip">Flow: detecting</span>
+          <span class="chip">Streaming chat enabled</span>
+          <span class="chip">OpenAI-compatible API</span>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="stack">
+          <article class="card">
+            <h2>Connection</h2>
+            <p class="status warn" id="status">Not connected to hostless.</p>
+            <div class="controls">
+              <button class="primary" id="connect-hostless" type="button">Connect with Hostless</button>
+              <button class="secondary" id="reset-connection" type="button">Forget token</button>
+            </div>
+            <p class="meta" id="connection-summary">Bridge token is required for chat requests.</p>
+          </article>
+
+          <article class="card">
+            <h2>Flow Notes</h2>
+            <p class="meta">
+              BYOK in this app is token-based only: users approve hostless and this page receives a
+              scoped <code>sk_local_*</code> bridge token. Provider API keys never enter browser code.
+            </p>
+          </article>
+
+          <article class="card">
+            <h2>Diagnostics</h2>
+            <pre class="diag" id="details">Waiting for runtime data...</pre>
+          </article>
+        </aside>
+
+        <article class="card chat-shell">
+          <div class="topline">
+            <div>
+              <strong>Chat</strong>
+              <p class="hint">Messages are sent to <code>/v1/chat/completions</code> using SSE streaming.</p>
+            </div>
+            <label>
+              Model
+              <select id="model">
+                <option value="gpt-4o-mini">gpt-4o-mini</option>
+                <option value="gpt-4o">gpt-4o</option>
+                <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="messages" id="messages"></div>
+
+          <form class="composer" id="chat-form">
+            <textarea id="prompt" placeholder="Ask something that proves your bridge token works..." required></textarea>
+            <div class="controls">
+              <button class="primary" id="send" type="submit">Send</button>
+              <button class="secondary" id="clear-chat" type="button">Clear chat</button>
+            </div>
+            <p class="error" id="error"></p>
+          </form>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const STATE_KEY = "hostless_state";
+      const TOKEN_KEY = "hostless_token";
+      const PROXY_KEY = "hostless_proxy_base";
+
+      const appState = {
+        messages: [],
+        connected: false,
+        token: "",
+        proxyBase: "",
+        mode: "detecting",
+        busy: false,
+      };
+
+      function readHostlessCallback() {
+        const query = new URLSearchParams(window.location.search);
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+        const token = hash.get("token");
+        const localUrl = query.get("local_url");
+        const port = query.get("port");
+        const state = query.get("state");
+        const expiresIn = query.get("expires_in");
+
+        if (!token || (!localUrl && !port)) return null;
+
+        const proxyBase = localUrl || `http://localhost:${port}`;
+        return { token, proxyBase, state, port, localUrl, expiresIn };
+      }
+
+      function readConnectionFromStorage() {
+        return {
+          token: localStorage.getItem(TOKEN_KEY) || "",
+          proxyBase: localStorage.getItem(PROXY_KEY) || "",
+        };
+      }
+
+      function inferMode() {
+        const host = window.location.hostname;
+        if (host.endsWith(".localhost")) {
+          return "wrapped-localhost";
+        }
+        if (appState.connected) {
+          return "byok-handshake";
+        }
+        return "awaiting-connection";
+      }
+
+      function formatNow() {
+        return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function setError(message) {
+        document.getElementById("error").textContent = message || "";
+      }
+
+      function clearConnectionState() {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(PROXY_KEY);
+        appState.token = "";
+        appState.proxyBase = "";
+        appState.connected = false;
+        renderConnection(null);
+      }
+
+      function shortToken(token) {
+        if (!token) return "none";
+        return `${token.slice(0, 14)}...${token.slice(-4)}`;
+      }
+
+      function renderDetails(callbackData) {
+        const details = {
+          mode: appState.mode,
+          origin: window.location.origin,
+          hostname: window.location.hostname,
+          tokenPreview: shortToken(appState.token),
+          proxyBase: appState.proxyBase || "not set",
+          callbackPort: callbackData ? callbackData.port : null,
+          callbackLocalUrl: callbackData ? callbackData.localUrl : null,
+          callbackExpiresIn: callbackData ? callbackData.expiresIn : null,
+          tokenInStorage: Boolean(localStorage.getItem(TOKEN_KEY)),
+          proxyInStorage: Boolean(localStorage.getItem(PROXY_KEY)),
+        };
+        document.getElementById("details").textContent = JSON.stringify(details, null, 2);
+      }
+
+      function renderConnection(callbackData) {
+        const statusEl = document.getElementById("status");
+        const summaryEl = document.getElementById("connection-summary");
+        const flowChip = document.getElementById("flow-chip");
+
+        appState.mode = inferMode();
+        flowChip.textContent = `Flow: ${appState.mode}`;
+
+        if (appState.connected) {
+          statusEl.className = "status ok";
+          statusEl.textContent = "Connected with bridge token.";
+          summaryEl.textContent = `Proxy: ${appState.proxyBase} | Token: ${shortToken(appState.token)}`;
+        } else {
+          statusEl.className = "status warn";
+          statusEl.textContent = "Not connected to hostless.";
+          summaryEl.textContent = "Run hostless and complete the handshake to begin chatting.";
+        }
+
+        renderDetails(callbackData);
+      }
+
+      function renderMessages() {
+        const container = document.getElementById("messages");
+        container.innerHTML = "";
+
+        if (!appState.messages.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty";
+          empty.textContent =
+            "No messages yet. Connect with Hostless, then send a prompt to validate BYOK and local route flows.";
+          container.appendChild(empty);
+          return;
+        }
+
+        for (const message of appState.messages) {
+          const wrapper = document.createElement("div");
+          wrapper.className = `message ${message.role}`;
+
+          const head = document.createElement("div");
+          head.className = "message-head";
+          head.innerHTML = `<span>${message.role}</span><span>${message.time}</span>`;
+
+          const text = document.createElement("p");
+          text.textContent = message.content;
+
+          wrapper.appendChild(head);
+          wrapper.appendChild(text);
+          container.appendChild(wrapper);
+        }
+
+        container.scrollTop = container.scrollHeight;
+      }
+
+      function addMessage(role, content) {
+        appState.messages.push({ role, content, time: formatNow() });
+        renderMessages();
+      }
+
+      function setBusy(isBusy) {
+        appState.busy = isBusy;
+        document.getElementById("send").disabled = isBusy;
+        document.getElementById("prompt").disabled = isBusy;
+      }
+
+      function stripV1(baseUrl) {
+        return baseUrl.replace(/\/$/, "");
+      }
+
+      async function streamChatCompletion() {
+        const model = document.getElementById("model").value;
+        const history = appState.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+        const endpoint = `${stripV1(appState.proxyBase)}/v1/chat/completions`;
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${appState.token}`,
+          },
+          body: JSON.stringify({
+            model,
+            stream: true,
+            messages: history,
+          }),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          if (response.status === 401 && body.includes("Invalid or unknown bridge token")) {
+            clearConnectionState();
+            throw new Error(
+              "Your bridge token is no longer valid (often after daemon restart). Reconnect with Hostless to mint a new token.",
+            );
+          }
+          throw new Error(`Request failed (${response.status}): ${body.slice(0, 220)}`);
+        }
+
+        if (!response.body) {
+          throw new Error("Streaming body missing in response.");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        let assistantIndex = -1;
+
+        const ensureAssistantMessage = () => {
+          if (assistantIndex >= 0) return;
+          addMessage("assistant", "");
+          assistantIndex = appState.messages.length - 1;
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          pending += decoder.decode(value, { stream: true });
+          const events = pending.split("\n\n");
+          pending = events.pop() || "";
+
+          for (const event of events) {
+            const lines = event.split("\n");
+            for (const line of lines) {
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload) continue;
+              if (payload === "[DONE]") {
+                return;
+              }
+
+              let chunk;
+              try {
+                chunk = JSON.parse(payload);
+              } catch (_error) {
+                continue;
+              }
+
+              const delta = chunk.choices && chunk.choices[0] ? chunk.choices[0].delta : null;
+              const textPart = delta && typeof delta.content === "string" ? delta.content : "";
+
+              if (textPart) {
+                ensureAssistantMessage();
+                appState.messages[assistantIndex].content += textPart;
+                renderMessages();
+              }
+            }
+          }
+        }
+      }
+
+      function initializeConnection() {
+        const callbackData = readHostlessCallback();
+
+        if (callbackData) {
+          const expectedState = localStorage.getItem(STATE_KEY);
+          if (expectedState && callbackData.state && expectedState !== callbackData.state) {
+            setError("State mismatch detected. Please reconnect.");
+          } else {
+            localStorage.setItem(TOKEN_KEY, callbackData.token);
+            localStorage.setItem(PROXY_KEY, callbackData.proxyBase);
+          }
+
+          history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        const stored = readConnectionFromStorage();
+        appState.token = stored.token;
+        appState.proxyBase = stored.proxyBase;
+        appState.connected = Boolean(stored.token && stored.proxyBase);
+
+        renderConnection(callbackData);
+      }
+
+      document.getElementById("connect-hostless").addEventListener("click", () => {
+        const state = crypto.randomUUID();
+        const callback = `${window.location.origin}${window.location.pathname}`;
+        const payload = {
+          origin: window.location.origin,
+          callback,
+          state,
+        };
+
+        localStorage.setItem(STATE_KEY, state);
+        const params = new URLSearchParams({
+          data: JSON.stringify(payload),
+          origin: payload.origin,
+          callback: payload.callback,
+          state: payload.state,
+        });
+        window.location.href = `hostless://register?${params.toString()}`;
+      });
+
+      document.getElementById("reset-connection").addEventListener("click", () => {
+        localStorage.removeItem(STATE_KEY);
+        clearConnectionState();
+        setError("");
+      });
+
+      document.getElementById("clear-chat").addEventListener("click", () => {
+        appState.messages = [];
+        renderMessages();
+        setError("");
+      });
+
+      document.getElementById("chat-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        setError("");
+
+        if (!appState.connected) {
+          setError("Connect with Hostless first to get a bridge token.");
+          return;
+        }
+
+        const input = document.getElementById("prompt");
+        const prompt = input.value.trim();
+        if (!prompt) return;
+
+        addMessage("user", prompt);
+        input.value = "";
+
+        setBusy(true);
+        try {
+          await streamChatCompletion();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setError(message);
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      initializeConnection();
+      renderMessages();
+    </script>
+  </body>
+</html>
