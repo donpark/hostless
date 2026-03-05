@@ -185,7 +185,7 @@ hostless auth login <provider>
 
 Start OAuth login flow for a provider (currently `openrouter`).
 
-## token (token-swapping)
+## token (`hostless token`)
 
 ```bash
 hostless token create [--name <name>] [--origin <origin|*>] [--providers <csv>] [--models <csv>] [--rate-limit <n>] [--ttl <seconds>]

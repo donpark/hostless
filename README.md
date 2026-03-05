@@ -41,8 +41,8 @@ curl -X POST http://localhost:11434/v1/chat/completions \
 
 Top-level commands are documented in `docs/cli-commands.md`.
 
-- `hostless serve`
 - `hostless proxy`
+- `hostless serve` (blocking version of `proxy start`)
 - `hostless run`
 - `hostless stop`
 - `hostless list`
@@ -54,7 +54,7 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - `hostless origins`
 - `hostless config`
 - `hostless auth`
-- `hostless token`
+- `hostless token` (bridge token lifecycle)
 
 ## Security Notes
 
