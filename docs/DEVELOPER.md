@@ -1,163 +1,110 @@
-# DEVELOPER.md
+# Developer Guide
 
-Guide for webapp developers integrating with hostless.
+This guide is for developers working on hostless itself.
 
-## Who this is for
+Related docs:
 
-You are building a web app and want either (a) safe BYOK access to LLM APIs without exposing provider keys in app runtime, or (b) per-app local isolation during development via a `.localhost` subdomain.
+- `docs/cli-commands.md`
+- `docs/auth-and-security.md`
+- `docs/testing.md`
 
-Primary hostless use-cases:
+## Scope
 
-1. Web apps (local or hosted) that need user-provided LLM API keys (BYOK) without exposing those keys to the app runtime.
-2. Web apps that run locally and want per-app isolation via a unique `.localhost` subdomain.
+This repo documents hostless daemon/proxy behavior, CLI operations, and server-side contracts.
+App-side implementation details are intentionally out of scope here.
 
-## What hostless gives your app
-
-- OpenAI-compatible proxy at `http://localhost:11434/v1/...`
-- Bridge tokens (`sk_local_*`) scoped to origin/model/provider/rate/TTL
-- Per-app origin isolation via `<name>.localhost` routes
-- Optional browser handshake using `hostless://register`
-
-## Fast local setup
+## Local Setup
 
 From repo root:
 
 ```bash
+make clean
 make build
 make serve
+```
+
+Add at least one provider key for proxy testing:
+
+```bash
 make keys-add PROVIDER=openai KEY=sk-...
 ```
 
-Optional quick checks:
+Verify daemon health:
 
 ```bash
 make health
-make test-web-status
 ```
 
-## Two integration patterns
+## Core Development Workflows
 
-### 1) Browser handshake flow (recommended for web apps)
+### CLI and daemon
 
-Use the custom URL scheme to request a token and runtime proxy base from hostless.
-
-High-level sequence:
-
-1. Your page redirects to `hostless://register?...`
-2. User approves local native prompt
-3. Browser returns to your callback URL
-4. You read token from URL fragment and proxy info from query params
-
-Typical callback shape:
-
-```text
-https://your-app.local/callback?port=<p>&local_url=http%3A%2F%2Flocalhost%3A<p>&state=...#token=sk_local_...
+```bash
+hostless serve --daemon
+hostless stop
+hostless route list
+hostless token list
 ```
 
-Store and use:
-
-- `token` (from hash fragment)
-- `local_url` or `port` (from query)
-
-Then call:
-
-- `${local_url}/v1/chat/completions`
-- `Authorization: Bearer <token>`
-
-## 2) Wrapped local dev server flow (recommended during local development)
-
-Run your app with hostless wrapping so route + token wiring are managed for you.
-
-Example:
+### Process wrapping and route lifecycle
 
 ```bash
 hostless run myapp -- npm run dev
+hostless route list
+hostless route remove myapp
 ```
 
-or with Make helpers in this repo:
+### Config and token persistence
 
 ```bash
-make test-web-wrapped WEB_PORT=4173 PORT=11434
+hostless config list
+hostless config set-token-persistence file
 ```
 
-This gives you a route like:
+## Testing
 
-- `http://myapp.localhost:11434`
-
-and injects useful env vars into the child process:
-
-- `HOSTLESS_URL`
-- `HOSTLESS_API`
-- `HOSTLESS_TOKEN` (when auto-token is enabled)
-- `PORT`, `HOST`
-
-## Minimal client request
-
-Use OpenAI-compatible JSON:
+Fast paths:
 
 ```bash
-curl -X POST http://localhost:11434/v1/chat/completions \
-  -H "Authorization: Bearer sk_local_..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}'
+cargo test
+cargo test --features internal-testing
+cargo test --features internal-testing --test proxy_integration
 ```
 
-## Dev workflow commands
+E2E (ignored by default):
 
 ```bash
-make test-web-wrapped WEB_PORT=4173 PORT=11434   # auto-start proxy if needed
-make test-web-status WEB_PORT=4173 PORT=11434    # health/routes/port/processes
-make stop                                         # stop tracked daemon PID
-make stop-all                                     # stop all hostless processes
+OPENAI_API_KEY=sk-... cargo test --features internal-testing --test openai_e2e -- --ignored --nocapture
 ```
 
-## Common issues
+Critical rule: use ephemeral test state (`AppState::new_ephemeral`, `VaultStore::open_ephemeral`) to avoid keychain and disk side effects.
 
-### `Hostless daemon is not running`
+## Troubleshooting
 
-Start it explicitly:
+### `Missing or invalid management authentication`
+
+The daemon and CLI may be out of sync on `~/.hostless/admin.token`.
 
 ```bash
-make serve
+hostless stop
+hostless serve --daemon
 ```
 
-or use wrapped target that auto-starts proxy:
+### Stale route entries
 
 ```bash
-make test-web-wrapped
-```
-
-### `Route '<name>.localhost' already exists`
-
-Remove stale route:
-
-```bash
+hostless route list
 hostless route remove <name>
 ```
 
-### `OSError: [Errno 48] Address already in use`
+### Port conflicts
 
-Something already listens on your app port. Stop it or use a different port.
+Use a different app port (`--app-port`) or daemon port (`--port` / `--daemon-port`).
 
-### Multiple old hostless processes during dev
+## Related Docs
 
-```bash
-make stop-all
-```
-
-## Integration checklist
-
-- Never ship provider API keys in frontend code
-- Always send `Authorization: Bearer sk_local_...` to hostless
-- Prefer `.localhost` app origins for per-app isolation in browser testing
-- Use short TTL and scoped providers/models in development tokens when possible
-- Treat bridge tokens as secrets (don’t commit them, don’t log full values)
-
-## Related docs
-
-- `README.md`
+- `docs/cli-commands.md`
 - `docs/auth-and-security.md`
 - `docs/reverse-proxy.md`
 - `docs/process-management.md`
-- `docs/cli-commands.md`
-- `test-web/README.md`
+- `docs/testing.md`

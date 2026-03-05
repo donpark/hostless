@@ -2,6 +2,12 @@
 
 Hostless integrates a reverse proxy (inspired by Vercel's [portless](https://github.com/vercel-labs/portless)) that gives each locally-running app its own `.localhost` subdomain. This solves a critical security problem: without per-app subdomains, all apps on `localhost` share the same origin and can reuse each other's bearer tokens.
 
+Related docs:
+
+- `docs/process-management.md`
+- `docs/auth-and-security.md`
+- `docs/cli-commands.md`
+
 ## Architecture
 
 ```

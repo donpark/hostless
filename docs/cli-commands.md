@@ -2,6 +2,12 @@
 
 This reference reflects the command surface implemented in `src/main.rs`.
 
+Related docs:
+
+- `docs/process-management.md`
+- `docs/auth-and-security.md`
+- `docs/reverse-proxy.md`
+
 ## Top-level commands
 
 ```bash

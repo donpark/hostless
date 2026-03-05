@@ -2,6 +2,12 @@
 
 Hostless can wrap child processes (dev servers, scripts, etc.) and manage their lifecycle, including automatic route registration, port assignment, and token provisioning.
 
+Related docs:
+
+- `docs/cli-commands.md`
+- `docs/reverse-proxy.md`
+- `docs/auth-and-security.md`
+
 ## Overview
 
 ```

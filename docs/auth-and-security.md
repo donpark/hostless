@@ -1,5 +1,11 @@
 # Auth, Providers & Vault
 
+Related docs:
+
+- `docs/cli-commands.md`
+- `docs/reverse-proxy.md`
+- `docs/process-management.md`
+
 ## Auth Model
 
 ### Bridge Tokens
@@ -23,7 +29,18 @@ Each token has:
 1. **`POST /auth/register`** — Browser apps. Shows a native OS dialog (rfd) asking user to approve. Origin required.
 2. **`POST /auth/token`** — CLI only. No dialog. Gated by requiring **no Origin header** (browsers always send one). This is what `hostless token create` and `curl` use.
 
-For browser handshake via `hostless://register`, the native URL handler forwards registration to the currently running daemon by reading `~/.hostless/hostless.port` (fallback `11434`). Callback payload includes the resolved runtime `port` and `local_url`, while the bridge token is returned in the URL fragment (`#token=...`); clients should use these values rather than hardcoding a port.
+### URL Scheme Handler Contract (`hostless:`)
+
+Custom URL scheme registration and native app packaging (for example, macOS `.app` handlers) are outside this repo's scope.
+Hostless documents only the daemon/API contract consumed by that handler.
+
+Handler-facing expectations:
+
+- The handler forwards registration intent to hostless using `POST /auth/register`.
+- The handler discovers the active daemon port from `~/.hostless/hostless.port` (fallback `11434`).
+- The handler preserves and returns caller `state` as-is for CSRF-style correlation.
+- Callback payload includes resolved runtime `port` and `local_url`.
+- Bridge token is returned in URL fragment (`#token=...`) and never in query string.
 
 ### Middleware Flow (`/v1/*` routes)
 

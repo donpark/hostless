@@ -1,5 +1,11 @@
 # Testing
 
+Related docs:
+
+- `docs/developer.md`
+- `docs/auth-and-security.md`
+- `docs/reverse-proxy.md`
+
 ## Test Suite Overview
 
 ```
