@@ -91,6 +91,189 @@ fn realtime_upstream_base(base_url: &str) -> String {
     }
 }
 
+fn openai_upstream_url(base_url: &str, path: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), path)
+}
+
+async fn proxy_openai_media(
+    state: Arc<AppState>,
+    req: axum::extract::Request,
+    upstream_path: &str,
+    enforce_json_model_scope: bool,
+) -> Response {
+    let validated_token = req.extensions().get::<ValidatedToken>().cloned();
+    let headers = req.headers().clone();
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 128 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "message": format!("Failed to read request body: {}", e),
+                        "type": "invalid_request_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut scoped_model: Option<String> = None;
+    if enforce_json_model_scope {
+        if let Ok(v) = serde_json::from_slice::<Value>(&body_bytes) {
+            if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
+                let (provider_key, _) = providers::resolve_provider(model);
+                if provider_key != "openai" {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "error": {
+                                "message": format!("'{}' currently supports OpenAI-compatible models only.", upstream_path),
+                                "type": "invalid_request_error",
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
+                scoped_model = Some(model.to_string());
+            }
+        }
+    }
+
+    if let Some(ref vt) = validated_token {
+        if let Err(e) = state.token_manager.validate_provider(&vt.0, "openai").await {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": {
+                        "message": format!("{}", e),
+                        "type": "scope_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if let Some(ref model) = scoped_model {
+            if let Err(e) = state.token_manager.validate_model(&vt.0, model).await {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "error": {
+                            "message": format!("{}", e),
+                            "type": "scope_error",
+                        }
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let (api_key, custom_base_url) = match state.vault.get_key("openai").await {
+        Ok(Some(pair)) => pair,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "message": "No API key configured for provider 'openai'. Use 'hostless keys add openai <key>' to add one.",
+                        "type": "configuration_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to retrieve API key: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": {
+                        "message": "Failed to retrieve API key from vault",
+                        "type": "internal_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let base_url = custom_base_url.as_deref().unwrap_or("https://api.openai.com");
+    let url = openai_upstream_url(base_url, upstream_path);
+
+    let mut req_builder = state
+        .http_client
+        .post(&url)
+        .header(header::AUTHORIZATION.as_str(), format!("Bearer {}", api_key));
+
+    if let Some(ct) = content_type {
+        req_builder = req_builder.header(header::CONTENT_TYPE.as_str(), ct);
+    }
+
+    if let Some(beta) = headers
+        .get("openai-beta")
+        .and_then(|v| v.to_str().ok())
+    {
+        req_builder = req_builder.header("openai-beta", beta);
+    }
+
+    let upstream_response = match req_builder.body(body_bytes).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "message": format!("Failed to reach upstream provider: {}", e),
+                        "type": "upstream_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let upstream_content_type = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+
+    let response_body = match upstream_response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "message": format!("Failed to read upstream response: {}", e),
+                        "type": "upstream_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut response = Response::builder().status(status);
+    if let Some(ct) = upstream_content_type {
+        response = response.header(header::CONTENT_TYPE, ct);
+    }
+
+    response
+        .body(Body::from(response_body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 fn ensure_local_management_access(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
     let admin_header = headers
         .get(crate::auth::admin::ADMIN_HEADER)
@@ -794,6 +977,43 @@ pub async fn realtime(
     response
         .body(Body::empty())
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+// ─── Media APIs (OpenAI-compatible passthrough) ──────────
+
+pub async fn audio_speech(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Response {
+    proxy_openai_media(state, req, "/v1/audio/speech", true).await
+}
+
+pub async fn audio_transcriptions(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Response {
+    proxy_openai_media(state, req, "/v1/audio/transcriptions", false).await
+}
+
+pub async fn audio_translations(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Response {
+    proxy_openai_media(state, req, "/v1/audio/translations", false).await
+}
+
+pub async fn images_generations(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Response {
+    proxy_openai_media(state, req, "/v1/images/generations", true).await
+}
+
+pub async fn files_upload(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Response {
+    proxy_openai_media(state, req, "/v1/files", false).await
 }
 
 // ─── Embeddings ──────────────────────────────────────────

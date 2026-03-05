@@ -159,6 +159,139 @@ async fn spawn_openai_responses_backend() -> (SocketAddr, tokio::task::JoinHandl
     (addr, handle)
 }
 
+/// Spawn an OpenAI-compatible backend for media endpoint passthrough tests.
+async fn spawn_openai_media_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use axum::{extract::Request as AxumReq, response::IntoResponse, routing::post, Router};
+
+    let app = Router::new()
+        .route(
+            "/v1/audio/speech",
+            post(|req: AxumReq| async move {
+                let auth_ok = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    == Some("Bearer test-openai-key");
+                if !auth_ok {
+                    return (StatusCode::UNAUTHORIZED, "missing auth").into_response();
+                }
+                (
+                    StatusCode::OK,
+                    [("content-type", "audio/mpeg")],
+                    vec![0_u8, 1_u8, 2_u8, 3_u8],
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/audio/transcriptions",
+            post(|req: AxumReq| async move {
+                let auth_ok = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    == Some("Bearer test-openai-key");
+                let ct = req
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let body = axum::body::to_bytes(req.into_body(), 8 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                let body_text = String::from_utf8_lossy(&body);
+
+                if !auth_ok || !ct.starts_with("multipart/form-data") || !body_text.contains("audio-test") {
+                    return (StatusCode::BAD_REQUEST, "bad multipart request").into_response();
+                }
+
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    r#"{"text":"ok"}"#,
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/files",
+            post(|req: AxumReq| async move {
+                let auth_ok = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    == Some("Bearer test-openai-key");
+                let ct = req
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let body = axum::body::to_bytes(req.into_body(), 8 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                let body_text = String::from_utf8_lossy(&body);
+
+                if !auth_ok || !ct.starts_with("multipart/form-data") || !body_text.contains("file-content") {
+                    return (StatusCode::BAD_REQUEST, "bad files request").into_response();
+                }
+
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    r#"{"id":"file_123","object":"file"}"#,
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/images/generations",
+            post(|req: AxumReq| async move {
+                let auth_ok = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    == Some("Bearer test-openai-key");
+                let body = axum::body::to_bytes(req.into_body(), 2 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+                if !auth_ok || v.get("prompt").and_then(|p| p.as_str()) != Some("sunrise") {
+                    return (StatusCode::BAD_REQUEST, "bad image request").into_response();
+                }
+
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    r#"{"created":123,"data":[{"url":"https://example.com/image.png"}]}"#,
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/audio/translations",
+            post(|| async move {
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    r#"{"text":"translated"}"#,
+                )
+                    .into_response()
+            }),
+        );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (addr, handle)
+}
+
 /// Spawn a WebSocket echo backend that mirrors text and binary messages.
 async fn spawn_ws_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -749,6 +882,180 @@ async fn test_responses_rejects_non_openai_provider_models() {
 
     let body = body_to_string(resp).await;
     assert!(body.contains("OpenAI-compatible models only"));
+}
+
+#[tokio::test]
+async fn test_audio_speech_binary_passthrough() {
+    let (backend_addr, _handle) = spawn_openai_media_backend().await;
+    let (state, router) = create_test_app(11434);
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/audio/speech")
+        .header("host", "localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"model":"gpt-4o-mini-tts","input":"hi","voice":"alloy"}).to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("content-type").unwrap(), "audio/mpeg");
+}
+
+#[tokio::test]
+async fn test_audio_transcriptions_multipart_passthrough() {
+    let (backend_addr, _handle) = spawn_openai_media_backend().await;
+    let (state, router) = create_test_app(11434);
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let boundary = "----hostlessboundary";
+    let body = format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\naudio-test\r\n--{}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-4o-transcribe\r\n--{}--\r\n",
+        boundary, boundary, boundary
+    );
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/audio/transcriptions")
+        .header("host", "localhost:11434")
+        .header("content-type", format!("multipart/form-data; boundary={}", boundary))
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_to_string(resp).await;
+    assert!(text.contains("\"text\":\"ok\""));
+}
+
+#[tokio::test]
+async fn test_files_upload_multipart_passthrough() {
+    let (backend_addr, _handle) = spawn_openai_media_backend().await;
+    let (state, router) = create_test_app(11434);
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let boundary = "----hostlessfileboundary";
+    let body = format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nassistants\r\n--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\nContent-Type: text/plain\r\n\r\nfile-content\r\n--{}--\r\n",
+        boundary, boundary, boundary
+    );
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/files")
+        .header("host", "localhost:11434")
+        .header("content-type", format!("multipart/form-data; boundary={}", boundary))
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_to_string(resp).await;
+    assert!(text.contains("\"file_123\""));
+}
+
+#[tokio::test]
+async fn test_images_generations_json_passthrough() {
+    let (backend_addr, _handle) = spawn_openai_media_backend().await;
+    let (state, router) = create_test_app(11434);
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/images/generations")
+        .header("host", "localhost:11434")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"model":"gpt-image-1","prompt":"sunrise"}).to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_to_string(resp).await;
+    assert!(text.contains("image.png"));
+}
+
+#[tokio::test]
+async fn test_audio_speech_rejects_provider_scope() {
+    let (backend_addr, _handle) = spawn_openai_media_backend().await;
+    let (state, router) = create_test_app_with_dev_mode(11434, false);
+
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let token = state
+        .token_manager
+        .issue_full(
+            "http://localhost:11434",
+            std::time::Duration::from_secs(3600),
+            None,
+            Some(vec!["anthropic".to_string()]),
+            None,
+            Some("media-scope-test".to_string()),
+        )
+        .await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/audio/speech")
+        .header("host", "localhost:11434")
+        .header("origin", "http://localhost:11434")
+        .header("authorization", format!("Bearer {}", token.token))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"model":"gpt-4o-mini-tts","input":"hi","voice":"alloy"}).to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 /// No Host header falls through to management API

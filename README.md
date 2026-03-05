@@ -71,8 +71,10 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - `/v1/chat/completions` and `/v1/responses` are supported on the local API plane.
 - `/v1/responses` currently supports OpenAI-compatible models only.
 - `/v1/realtime` websocket proxying is supported for OpenAI-compatible realtime models.
+- Media passthrough is supported for OpenAI-compatible endpoints: `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
 - SSE streaming is supported; `/v1/responses` stream events are passed through without event-name rewriting.
 - WebSocket upgrade pass-through is supported for reverse-proxied local apps and `/v1/realtime` on the local API plane.
+- Full endpoint compatibility matrix (M1/M2/M3) is documented in `docs/auth-and-security.md`.
 
 ## Data Files
 

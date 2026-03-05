@@ -19,7 +19,7 @@ cargo test --features internal-testing
 | lib (src/lib.rs) | 41 | Unit tests across all modules |
 | bin (src/main.rs) | 41 | Same unit tests compiled in binary context |
 | auth_integration | 6 | Auth token flow, origin isolation, scope enforcement |
-| proxy_integration | 66 | Reverse proxy dispatch, route management, framework flags, API routing coverage |
+| proxy_integration | 71 | Reverse proxy dispatch, route management, framework flags, API routing coverage |
 | openai_e2e | 3 (ignored) | Live API tests requiring `OPENAI_API_KEY` |
 
 ### Running Tests
@@ -99,7 +99,7 @@ Variants: `spawn_backend_with_headers()` (extra response headers), `spawn_echo_b
 
 ## Proxy Integration Tests (`tests/proxy_integration.rs`)
 
-66 tests ported from portless's test suite plus hostless-specific hardening/compatibility coverage. Organized into sections:
+71 tests ported from portless's test suite plus hostless-specific hardening/compatibility coverage. Organized into sections:
 
 ### Dispatch + Reverse Proxy (18 tests)
 
@@ -130,6 +130,11 @@ Ported from `proxy.test.ts`:
 | `test_responses_rejects_non_openai_provider_models` | `/v1/responses` guardrail for non-OpenAI provider prefixes |
 | `test_realtime_websocket_proxy_roundtrip_with_token` | `/v1/realtime` websocket proxy success path in strict auth mode |
 | `test_realtime_websocket_rejects_model_scope_violation` | `/v1/realtime` rejects model scope mismatch before upgrade |
+| `test_audio_speech_binary_passthrough` | `/v1/audio/speech` binary response passthrough |
+| `test_audio_transcriptions_multipart_passthrough` | `/v1/audio/transcriptions` multipart passthrough |
+| `test_files_upload_multipart_passthrough` | `/v1/files` multipart passthrough |
+| `test_images_generations_json_passthrough` | `/v1/images/generations` JSON passthrough |
+| `test_audio_speech_rejects_provider_scope` | Media route provider-scope enforcement |
 
 ### Route Management API (12 tests)
 

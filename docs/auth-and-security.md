@@ -75,6 +75,30 @@ Current endpoint support:
 - `/v1/chat/completions`: OpenAI-compatible request surface, transformed for Anthropic/Google when needed.
 - `/v1/responses`: OpenAI-compatible passthrough route (OpenAI provider only for now).
 - `/v1/realtime`: OpenAI-compatible websocket upgrade passthrough with pre-upgrade provider/model scope checks.
+- Media passthrough routes (OpenAI-compatible): `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
+
+### Compatibility Matrix (M1/M2/M3)
+
+| Endpoint | Milestone | Request Type | Transport | Provider Coverage | Scope Enforcement |
+|---|---|---|---|---|---|
+| `/v1/chat/completions` | baseline | JSON | HTTP | OpenAI + Anthropic + Google (via transforms) | Provider + model |
+| `/v1/responses` | M1 | JSON/SSE | HTTP + SSE | OpenAI-compatible only | Provider + model |
+| `/v1/realtime` | M2 | WebSocket upgrade | WebSocket | OpenAI-compatible only | Provider + model (pre-upgrade) |
+| `/v1/audio/speech` | M3 | JSON | HTTP (binary response passthrough) | OpenAI-compatible only | Provider + model (from JSON `model`) |
+| `/v1/audio/transcriptions` | M3 | Multipart | HTTP | OpenAI-compatible only | Provider |
+| `/v1/audio/translations` | M3 | Multipart | HTTP | OpenAI-compatible only | Provider |
+| `/v1/images/generations` | M3 | JSON | HTTP | OpenAI-compatible only | Provider + model (from JSON `model`) |
+| `/v1/files` | M3 | Multipart | HTTP | OpenAI-compatible only | Provider |
+
+Notes:
+- All `/v1/*` routes are behind the same auth middleware.
+- In `--dev-mode`, bare localhost and empty-origin requests bypass token auth, so route-level scope checks apply only when a validated token is present.
+- For multipart routes, model-level scope is not currently extracted from body parts.
+
+Media route scope details:
+- Provider scope enforcement is applied to all media routes.
+- Model scope enforcement is applied when the request body is JSON with a `model` field (for example `/v1/audio/speech`, `/v1/images/generations`).
+- Multipart routes (`/v1/files`, `/v1/audio/transcriptions`, `/v1/audio/translations`) currently enforce provider scope only.
 
 The `Provider` trait handles request/response transformation so clients always use OpenAI-compatible format.
 
