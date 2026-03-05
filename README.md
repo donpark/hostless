@@ -1,5 +1,7 @@
 # Hostless
 
+<img width="128" height="128" alt="authmatic-128" src="https://github.com/user-attachments/assets/97039365-cbd1-41b0-bc54-f5b3f4568355" />
+
 Hostless is a local AI proxy and local reverse proxy.
 
 - Forward proxy plane: OpenAI-compatible API on `localhost` that injects locally stored provider keys.
