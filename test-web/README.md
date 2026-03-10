@@ -2,7 +2,7 @@
 
 Single test app for validating both hostless use-cases with a dynamic streaming AI chat UI:
 
-1. BYOK handshake flow for web apps (`hostless://register` -> `sk_local_*` bridge token)
+1. BYOK handshake flow for web apps (`authmatic://register` -> `sk_local_*` bridge token)
 2. Localhost subdomain flow for local dev (`hostless run` -> `<name>.localhost` route isolation)
 
 The app calls `POST /v1/chat/completions` with `stream: true` and renders SSE deltas.
@@ -68,7 +68,7 @@ make stop-all
 
 ## URL scheme troubleshooting
 
-If `hostless://register` has no handler:
+If `authmatic://register` has no handler:
 
 ```bash
 make app-build

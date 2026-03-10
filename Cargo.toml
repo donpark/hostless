@@ -1,6 +1,6 @@
 [package]
 name = "hostless"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Local AI proxy that manages LLM API keys and injects them into forwarded requests"
 license = "MIT"

@@ -3,7 +3,7 @@
 Hostless supports one product-level action, `Connect to Hostless`, with three runtime families behind it:
 
 - Local `.localhost` apps use direct browser registration with `POST /auth/register`.
-- Hosted apps use the `hostless:` native-helper handshake and return via callback data.
+- Hosted apps use the `authmatic:` native-helper handshake and return via callback data.
 - Desktop apps use either direct registration from a webview shell or CLI-provisioned tokens for native GUI apps.
 
 This repo includes two embeddable reference implementations:
@@ -18,7 +18,7 @@ Both browser references share the same runtime contract and storage semantics.
 Use one button and branch by current runtime:
 
 1. If `window.location.hostname.endsWith(".localhost")`, connect directly to `http://localhost:<same-port>/auth/register`.
-2. Otherwise, launch `hostless://register?...` and let the native helper complete the remote bootstrap.
+2. Otherwise, launch `authmatic://register?...` and let the native helper complete the remote bootstrap.
 3. If running as a desktop app, use the desktop-specific flow below.
 
 This keeps the local web case simple while still supporting hosted web and desktop apps.
@@ -56,7 +56,7 @@ const response = await hostless.fetchWithBridge("v1/chat/completions", {
 - Parses remote callback data from query string plus `#token=...`
 - Persists `hostless_token`, `hostless_proxy_base`, and `hostless_state`
 - Uses direct JSON registration for `.localhost` apps
-- Uses `hostless://register` for remote apps
+- Uses `authmatic://register` for remote apps
 - Adds `Authorization: Bearer sk_local_...` for `/v1/*` calls
 - Clears stored connection state when hostless reports an invalid or expired token
 

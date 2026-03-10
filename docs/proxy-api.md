@@ -129,7 +129,7 @@ Behavior:
 - returns `400` if `code` is missing
 - otherwise returns a simple HTML success page
 
-This endpoint is for Hostless provider OAuth flows. It is not the hosted app callback used by `hostless://register` handshakes.
+This endpoint is for Hostless provider OAuth flows. It is not the hosted app callback used by `authmatic://register` handshakes.
 
 ## Auth and Token Endpoints
 

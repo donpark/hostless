@@ -41,10 +41,12 @@ Desktop guidance:
 - **Native GUI apps** should currently use `hostless token create` / `POST /auth/token` as a trusted local bootstrap path.
 - CLI token creation does not show the approval dialog because possession of the local admin token is treated as machine-owner authorization already.
 
-### URL Scheme Handler Contract (`hostless:`)
+### URL Scheme Handler Contract (`authmatic:`)
 
 Custom URL scheme registration and native app packaging (for example, macOS `.app` handlers) are outside this repo's scope.
 Hostless documents only the daemon/API contract consumed by that handler.
+
+The recommended product-facing scheme is `authmatic:`. A temporary `hostless:` compatibility alias may still be accepted during transition.
 
 Handler-facing expectations:
 

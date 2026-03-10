@@ -18,8 +18,8 @@ help:
 	@echo "  make serve-dev PORT=11434          Start proxy in --dev-mode"
 	@echo "  make stop                          Stop daemon (if running)"
 	@echo "  make stop-all                      Stop all hostless processes"
-	@echo "  make app-scheme-register           Register @app bundle for hostless://"
-	@echo "  make scheme-test                   Trigger hostless:// URL from terminal"
+	@echo "  make app-scheme-register           Register @app bundle for authmatic://"
+	@echo "  make scheme-test                   Trigger authmatic:// URL from terminal"
 	@echo "  make app-build                     Build desktop app (@app)"
 	@echo "  make keys-add PROVIDER=openai KEY=sk-... [BASE_URL=...]"
 	@echo "  make keys-list                     List stored providers"
@@ -63,7 +63,7 @@ stop-all:
 	@pgrep -fl hostless || echo "No hostless processes running"
 
 scheme-test:
-	open "hostless://register?origin=http%3A%2F%2Flocalhost%3A$(WEB_PORT)&callback=http%3A%2F%2Flocalhost%3A$(WEB_PORT)&state=make-test"
+	open "authmatic://register?origin=http%3A%2F%2Flocalhost%3A$(WEB_PORT)&callback=http%3A%2F%2Flocalhost%3A$(WEB_PORT)&state=make-test"
 
 app-build:
 	cd app && bun run build
@@ -78,7 +78,7 @@ app-scheme-register:
 		exit 1; \
 	fi
 	"$(LSREGISTER)" -f "$(APP_DEV_BUNDLE)"
-	@echo "Registered @app as hostless:// handler candidate: $(APP_DEV_BUNDLE)"
+	@echo "Registered @app as authmatic:// handler candidate: $(APP_DEV_BUNDLE)"
 
 keys-add: build
 	@if [ -z "$(PROVIDER)" ] || [ -z "$(KEY)" ]; then \

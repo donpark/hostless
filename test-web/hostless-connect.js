@@ -67,7 +67,7 @@ export function readHostlessCallback(locationObject = window.location) {
   };
 }
 
-export function buildSchemeRegistrationUrl(payload, schemeBase = "hostless://register") {
+export function buildSchemeRegistrationUrl(payload, schemeBase = "authmatic://register") {
   const encoded = new URLSearchParams();
   encoded.set("data", JSON.stringify(payload));
   encoded.set("origin", payload.origin);
