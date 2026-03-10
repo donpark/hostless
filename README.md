@@ -240,4 +240,5 @@ Hostless stores runtime/config files in `~/.hostless/`.
 
 ## License
 
-MIT
+Apache 2.0
+
