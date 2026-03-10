@@ -3,6 +3,7 @@
 Related docs:
 
 - `docs/cli-commands.md`
+- `docs/proxy-api.md`
 - `docs/reverse-proxy.md`
 - `docs/process-management.md`
 
@@ -34,6 +35,12 @@ Each token has:
 
 This is what `hostless token create` and local `curl` usage rely on.
 
+Desktop guidance:
+
+- **Webview desktop apps** should use `POST /auth/register` when the renderer presents a stable origin and you want the normal interactive approval flow.
+- **Native GUI apps** should currently use `hostless token create` / `POST /auth/token` as a trusted local bootstrap path.
+- CLI token creation does not show the approval dialog because possession of the local admin token is treated as machine-owner authorization already.
+
 ### URL Scheme Handler Contract (`hostless:`)
 
 Custom URL scheme registration and native app packaging (for example, macOS `.app` handlers) are outside this repo's scope.
@@ -46,6 +53,8 @@ Handler-facing expectations:
 - The handler preserves and returns caller `state` as-is for CSRF-style correlation.
 - Callback payload includes resolved runtime `port` and `local_url`.
 - Bridge token is returned in URL fragment (`#token=...`) and never in query string.
+
+Desktop apps do not need to use the URL scheme handler unless they are intentionally delegating registration to a separate helper process. A packaged desktop app can instead call `POST /auth/register` directly from a webview shell, or use `hostless token create` for native GUI bootstrap.
 
 ### Middleware Flow (`/v1/*` routes, including `/v1/chat/completions`, `/v1/responses`, and `/v1/realtime`)
 
@@ -62,6 +71,16 @@ Handler-facing expectations:
 - `is_bare_localhost()` — URL-parses to check host is exactly `"localhost"` or `"127.0.0.1"`. Blocks `localhost.evil.com`.
 - `is_localhost_subdomain()` — checks `.localhost` TLD (RFC 6761). e.g., `myapp.localhost:1355` → distinct per-app identity.
 - `.localhost` subdomains **always require tokens**, even in dev mode.
+- Bridge tokens for browser and webview flows are validated against the request `Origin` header.
+- Native GUI clients often send no `Origin` header. For that reason, the current native desktop recommendation is CLI-provisioned tokens rather than browser-style interactive registration.
+- `"*"` wildcard tokens match any origin, including empty origin, and are therefore more permissive than `.localhost` or specific-origin tokens.
+
+### Desktop Security Notes
+
+- Prefer webview registration only when the desktop shell can keep a stable, predictable origin across registration and later `/v1/*` calls.
+- Prefer CLI provisioning for native GUI apps whose requests come from native HTTP clients without a browser origin model.
+- Store desktop bridge tokens in OS-backed credential stores when possible.
+- Treat `hostless token create` as an admin/bootstrap workflow. It is appropriate for trusted local apps, but it is not the same consent surface as `POST /auth/register`.
 
 ## Provider Routing
 
@@ -72,10 +91,15 @@ Model name determines the upstream provider:
 - Explicit prefix: `openai/gpt-4o` strips prefix before forwarding
 
 Current endpoint support:
-- `/v1/chat/completions`: OpenAI-compatible request surface, transformed for Anthropic/Google when needed.
-- `/v1/responses`: OpenAI-compatible passthrough route (OpenAI provider only for now), with both HTTP and WebSocket mode support.
-- `/v1/realtime`: OpenAI-compatible websocket upgrade passthrough with pre-upgrade provider/model scope checks.
-- Media passthrough routes (OpenAI-compatible): `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
+
+Detailed request and response contracts for `/v1/*`, `/auth/*`, `/routes/*`, and `/health` live in `docs/proxy-api.md`.
+
+At a high level:
+
+- `/v1/chat/completions`: OpenAI-compatible request surface with Anthropic and Google routing/transforms
+- `/v1/responses`: OpenAI-compatible HTTP and WebSocket support for OpenAI-compatible models
+- `/v1/realtime`: OpenAI-compatible realtime websocket passthrough
+- media routes and `/v1/embeddings`: OpenAI-compatible passthroughs with scope enforcement as described below
 
 ### Compatibility Matrix (M1/M2/M3)
 

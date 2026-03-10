@@ -382,10 +382,8 @@
       </section>
     </main>
 
-    <script>
-      const STATE_KEY = "hostless_state";
-      const TOKEN_KEY = "hostless_token";
-      const PROXY_KEY = "hostless_proxy_base";
+    <script type="module">
+      import { createHostlessClient, shortToken } from "./hostless-connect.js";
 
       const appState = {
         messages: [],
@@ -396,39 +394,7 @@
         busy: false,
       };
 
-      function readHostlessCallback() {
-        const query = new URLSearchParams(window.location.search);
-        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-
-        const token = hash.get("token");
-        const localUrl = query.get("local_url");
-        const port = query.get("port");
-        const state = query.get("state");
-        const expiresIn = query.get("expires_in");
-
-        if (!token || (!localUrl && !port)) return null;
-
-        const proxyBase = localUrl || `http://localhost:${port}`;
-        return { token, proxyBase, state, port, localUrl, expiresIn };
-      }
-
-      function readConnectionFromStorage() {
-        return {
-          token: localStorage.getItem(TOKEN_KEY) || "",
-          proxyBase: localStorage.getItem(PROXY_KEY) || "",
-        };
-      }
-
-      function inferMode() {
-        const host = window.location.hostname;
-        if (host.endsWith(".localhost")) {
-          return "wrapped-localhost";
-        }
-        if (appState.connected) {
-          return "byok-handshake";
-        }
-        return "awaiting-connection";
-      }
+      const hostless = createHostlessClient();
 
       function formatNow() {
         return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -438,18 +404,18 @@
         document.getElementById("error").textContent = message || "";
       }
 
-      function clearConnectionState() {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(PROXY_KEY);
-        appState.token = "";
-        appState.proxyBase = "";
-        appState.connected = false;
-        renderConnection(null);
+      function syncConnectionState() {
+        const connection = hostless.getConnection();
+        appState.token = connection.token || "";
+        appState.proxyBase = connection.proxyBase || "";
+        appState.connected = Boolean(appState.token && appState.proxyBase);
+        appState.mode = hostless.getMode();
       }
 
-      function shortToken(token) {
-        if (!token) return "none";
-        return `${token.slice(0, 14)}...${token.slice(-4)}`;
+      function clearConnectionState() {
+        hostless.disconnect();
+        syncConnectionState();
+        renderConnection(null);
       }
 
       function renderDetails(callbackData) {
@@ -462,8 +428,8 @@
           callbackPort: callbackData ? callbackData.port : null,
           callbackLocalUrl: callbackData ? callbackData.localUrl : null,
           callbackExpiresIn: callbackData ? callbackData.expiresIn : null,
-          tokenInStorage: Boolean(localStorage.getItem(TOKEN_KEY)),
-          proxyInStorage: Boolean(localStorage.getItem(PROXY_KEY)),
+          tokenInStorage: Boolean(appState.token),
+          proxyInStorage: Boolean(appState.proxyBase),
         };
         document.getElementById("details").textContent = JSON.stringify(details, null, 2);
       }
@@ -473,7 +439,7 @@
         const summaryEl = document.getElementById("connection-summary");
         const flowChip = document.getElementById("flow-chip");
 
-        appState.mode = inferMode();
+        syncConnectionState();
         flowChip.textContent = `Flow: ${appState.mode}`;
 
         if (appState.connected) {
@@ -532,10 +498,6 @@
         document.getElementById("prompt").disabled = isBusy;
       }
 
-      function stripV1(baseUrl) {
-        return baseUrl.replace(/\/$/, "");
-      }
-
       async function streamChatCompletion() {
         const model = document.getElementById("model").value;
         const history = appState.messages.map((message) => ({
@@ -543,12 +505,10 @@
           content: message.content,
         }));
 
-        const endpoint = `${stripV1(appState.proxyBase)}/v1/chat/completions`;
-        const response = await fetch(endpoint, {
+        const response = await hostless.fetchWithBridge("v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${appState.token}`,
           },
           body: JSON.stringify({
             model,
@@ -559,12 +519,6 @@
 
         if (!response.ok) {
           const body = await response.text();
-          if (response.status === 401 && body.includes("Invalid or unknown bridge token")) {
-            clearConnectionState();
-            throw new Error(
-              "Your bridge token is no longer valid (often after daemon restart). Reconnect with Hostless to mint a new token.",
-            );
-          }
           throw new Error(`Request failed (${response.status}): ${body.slice(0, 220)}`);
         }
 
@@ -622,49 +576,29 @@
       }
 
       function initializeConnection() {
-        const callbackData = readHostlessCallback();
-
-        if (callbackData) {
-          const expectedState = localStorage.getItem(STATE_KEY);
-          if (expectedState && callbackData.state && expectedState !== callbackData.state) {
-            setError("State mismatch detected. Please reconnect.");
-          } else {
-            localStorage.setItem(TOKEN_KEY, callbackData.token);
-            localStorage.setItem(PROXY_KEY, callbackData.proxyBase);
-          }
-
-          history.replaceState({}, document.title, window.location.pathname);
+        const result = hostless.initialize();
+        syncConnectionState();
+        if (result.error) {
+          setError(result.error.message);
         }
-
-        const stored = readConnectionFromStorage();
-        appState.token = stored.token;
-        appState.proxyBase = stored.proxyBase;
-        appState.connected = Boolean(stored.token && stored.proxyBase);
-
-        renderConnection(callbackData);
+        renderConnection(result.callbackData);
       }
 
-      document.getElementById("connect-hostless").addEventListener("click", () => {
-        const state = crypto.randomUUID();
-        const callback = `${window.location.origin}${window.location.pathname}`;
-        const payload = {
-          origin: window.location.origin,
-          callback,
-          state,
-        };
-
-        localStorage.setItem(STATE_KEY, state);
-        const params = new URLSearchParams({
-          data: JSON.stringify(payload),
-          origin: payload.origin,
-          callback: payload.callback,
-          state: payload.state,
-        });
-        window.location.href = `hostless://register?${params.toString()}`;
+      document.getElementById("connect-hostless").addEventListener("click", async () => {
+        setError("");
+        try {
+          const result = await hostless.connect();
+          if (!result.launched) {
+            syncConnectionState();
+            renderConnection(null);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setError(message);
+        }
       });
 
       document.getElementById("reset-connection").addEventListener("click", () => {
-        localStorage.removeItem(STATE_KEY);
         clearConnectionState();
         setError("");
       });

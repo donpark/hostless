@@ -2,7 +2,8 @@
 
 Related docs:
 
-- `docs/developer.md`
+- `docs/cli-commands.md`
+- `docs/process-management.md`
 - `docs/auth-and-security.md`
 - `docs/reverse-proxy.md`
 

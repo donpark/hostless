@@ -144,52 +144,21 @@ Exact hostname matches always take priority over wildcard fallback. For wildcard
 
 PID liveness is checked via `kill(pid, 0)` (signal 0 — checks permission without sending a signal). A background tokio task runs every 300s to clean up stale routes and revoke their associated tokens.
 
-## HTTP Endpoints
+## Route Management API
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/routes/register` | Register a route (localhost-only, auto-provisions bridge token) |
-| POST | `/routes/deregister` | Remove a route and revoke its token |
-| GET | `/routes` | List active routes |
+Hostless exposes route-management endpoints on the bare-localhost management plane:
 
-### POST /routes/register
+- `GET /routes`
+- `POST /routes/register`
+- `POST /routes/deregister`
 
-Request body:
-```json
-{
-  "name": "myapp",
-  "port": 4001,
-  "pid": 12345,
-  "auto_token": true,
-  "allowed_providers": ["openai"],
-  "allowed_models": ["gpt-4o*"],
-  "rate_limit": 100,
-  "ttl": 86400
-}
-```
+Those endpoints are part of the canonical HTTP API reference in `docs/proxy-api.md`, including request and response bodies, auth requirements, and curl examples.
 
-Response:
-```json
-{
-  "hostname": "myapp.localhost",
-  "url": "http://myapp.localhost:11434",
-  "target_port": 4001,
-  "pid": 12345,
-  "token": {
-    "token": "sk_local_...",
-    "origin": "http://myapp.localhost:11434",
-    "expires_in": 86400
-  }
-}
-```
+Important route-specific behavior:
 
-The auto-provisioned token is **origin-scoped** to `http://<name>.localhost:<server_port>`, meaning it can only be used by requests originating from that specific subdomain.
-
-### POST /routes/deregister
-
-Request: `{ "name": "myapp" }` — accepts app name or full hostname.
-
-Removes the route AND revokes the associated bridge token.
+- `POST /routes/register` can auto-provision a bridge token scoped to `http://<name>.localhost:<server_port>`
+- `POST /routes/deregister` removes the route and revokes the associated auto-provisioned token if present
+- all route-management requests are localhost-only management operations and require admin authentication
 
 ## Dependencies
 

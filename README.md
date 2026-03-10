@@ -15,15 +15,9 @@ Hostless is a local AI proxy and local reverse proxy.
 
 ## What It Implements
 
-- OpenAI-compatible Chat Completions: `POST /v1/chat/completions`
-- OpenAI-compatible Responses API (HTTP + SSE): `POST /v1/responses`
-- OpenAI-compatible Responses API (WebSocket): `ws://localhost:11434/v1/responses?model=...`
-- OpenAI-compatible Realtime API (WebSocket): `ws://localhost:11434/v1/realtime?model=...`
-- OpenAI-compatible media passthrough: `POST /v1/audio/speech`
-- OpenAI-compatible media passthrough: `POST /v1/audio/transcriptions`
-- OpenAI-compatible media passthrough: `POST /v1/audio/translations`
-- OpenAI-compatible media passthrough: `POST /v1/images/generations`
-- OpenAI-compatible media passthrough: `POST /v1/files`
+- Full localhost API reference: `docs/proxy-api.md`
+- OpenAI-compatible localhost proxy surface for chat, responses, realtime, embeddings, and media APIs
+- `.localhost` reverse proxy routing for local apps with per-app origin isolation
 
 ## Status
 
@@ -216,11 +210,7 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - Management endpoints require `x-hostless-admin: <token>` plus localhost access constraints.
 - `POST /auth/token` is local-only: requires admin auth, no `Origin` header, and localhost `Host` (`localhost`, `127.0.0.1`, `[::1]`).
 - Token persistence modes: `off` (default), `file`, `keychain`.
-- `/v1/chat/completions` and `/v1/responses` are supported on the local API plane.
-- `/v1/responses` currently supports OpenAI-compatible models only.
-- `/v1/responses` supports HTTP mode and WebSocket mode (`ws://localhost:11434/v1/responses?model=gpt-4o-mini`).
-- `/v1/realtime` websocket proxying is supported for OpenAI-compatible realtime models.
-- Media passthrough is supported for OpenAI-compatible endpoints: `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/images/generations`, `/v1/files`.
+- Detailed endpoint coverage and request contracts live in `docs/proxy-api.md`.
 - SSE streaming is supported; `/v1/responses` stream events are passed through without event-name rewriting.
 - WebSocket upgrade pass-through is supported for reverse-proxied local apps and `/v1/realtime` on the local API plane.
 - Full endpoint compatibility matrix (M1/M2/M3) is documented in `docs/auth-and-security.md`.
@@ -240,12 +230,12 @@ Hostless stores runtime/config files in `~/.hostless/`.
 
 ## Documentation Map
 
+- `docs/proxy-api.md`: canonical HTTP endpoint reference for `/health`, `/auth/*`, `/routes/*`, and `/v1/*`
 - `docs/cli-commands.md`: canonical CLI reference
 - `docs/auth-and-security.md`: token model, auth middleware, provider routing, key storage
 - `docs/reverse-proxy.md`: host-header dispatch, reverse proxy internals, route table
 - `docs/process-management.md`: `hostless run`, framework flag injection, daemon lifecycle
 - `docs/testing.md`: test suite structure and testing patterns
-- `docs/developer.md`: hostless local development workflow (repo maintainers)
 - `AGENTS.md`: architecture map for maintainers and coding agents
 
 ## License
