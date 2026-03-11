@@ -1,5 +1,6 @@
 pub mod cors;
 pub mod dispatch;
+pub mod ollama;
 pub mod pages;
 pub mod reverse_proxy;
 pub mod route_table;
@@ -26,6 +27,8 @@ pub struct AppState {
     pub config: tokio::sync::RwLock<AppConfig>,
     pub token_manager: auth::bridge_token::BridgeTokenManager,
     pub route_table: route_table::RouteTable,
+    pub ollama_registry: ollama::OllamaModelRegistry,
+    pub ollama_activity: ollama::ModelActivityTracker,
     pub http_client: reqwest::Client,
     pub port: u16,
     pub admin_token: String,
@@ -69,6 +72,8 @@ impl AppState {
             config: tokio::sync::RwLock::new(config),
             token_manager,
             route_table,
+            ollama_registry: ollama::OllamaModelRegistry::new(),
+            ollama_activity: ollama::ModelActivityTracker::new(std::time::Duration::from_secs(600)),
             http_client,
             port,
             admin_token,
@@ -130,6 +135,8 @@ impl AppState {
             config: tokio::sync::RwLock::new(config),
             token_manager,
             route_table,
+            ollama_registry: ollama::OllamaModelRegistry::new(),
+            ollama_activity: ollama::ModelActivityTracker::new(std::time::Duration::from_secs(600)),
             http_client,
             port,
             admin_token: "test-admin-token".to_string(),
@@ -163,6 +170,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     let public_routes = Router::new()
         .route("/health", get(routes::health))
+        .route("/api/tags", get(routes::ollama_tags))
+        .route("/api/show", post(routes::ollama_show))
+        .route("/api/ps", get(routes::ollama_ps))
         .route("/callback", get(routes::oauth_callback))
         .route("/auth/register", post(routes::register_origin))
         .route("/auth/token", post(routes::create_token))

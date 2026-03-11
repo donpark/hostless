@@ -15,6 +15,8 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 
+use hostless::config::OllamaApiModelConfig;
+
 // ═══════════════════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════════════════
@@ -157,6 +159,71 @@ async fn spawn_openai_responses_backend() -> (SocketAddr, tokio::task::JoinHandl
     });
 
     (addr, handle)
+}
+
+async fn spawn_openai_models_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use axum::{response::IntoResponse, routing::get, Json, Router};
+    use serde_json::json;
+
+    let app = Router::new().route(
+        "/v1/models",
+        get(|| async move {
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "gpt-4o-mini",
+                            "object": "model",
+                            "created": 1721606400,
+                            "owned_by": "openai"
+                        },
+                        {
+                            "id": "gpt-image-1",
+                            "object": "model",
+                            "created": 1735689600,
+                            "owned_by": "openai"
+                        }
+                    ]
+                })),
+            )
+                .into_response()
+        }),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (addr, handle)
+}
+
+async fn configure_ollama_api_models(
+    state: &Arc<hostless::server::AppState>,
+    provider: &str,
+    ids: &[&str],
+) {
+    let mut config = state.config.write().await;
+    config.ollama_api_models.insert(
+        provider.to_string(),
+        ids.iter()
+            .map(|id| OllamaApiModelConfig {
+                id: (*id).to_string(),
+                modified_at: None,
+                size: None,
+                context_window: None,
+                capabilities: Vec::new(),
+                family: None,
+                families: Vec::new(),
+                parameter_size: None,
+                quantization_level: None,
+            })
+            .collect(),
+    );
 }
 
 /// Spawn an OpenAI-compatible backend for media endpoint passthrough tests.
@@ -882,6 +949,208 @@ async fn test_responses_rejects_non_openai_provider_models() {
 
     let body = body_to_string(resp).await;
     assert!(body.contains("OpenAI-compatible models only"));
+}
+
+/// Bare localhost can reach Ollama-compatible discovery endpoints.
+#[tokio::test]
+async fn test_ollama_tags_lists_models_for_configured_providers() {
+    let (state, router) = create_test_app(48282);
+    state
+        .vault
+        .add_key("openai", "test-openai-key", None)
+        .await
+        .unwrap();
+    configure_ollama_api_models(
+        &state,
+        "openai",
+        &["gpt-4o-realtime-preview", "gpt-4o-mini-tts", "gpt-image-1"],
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/tags")
+        .header("host", "localhost:48282")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_to_string(resp).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let models = json["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    assert!(models.iter().all(|model| model["name"].as_str().unwrap().starts_with("openai/")));
+    let names = models
+        .iter()
+        .map(|model| model["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"openai/gpt-4o-realtime-preview"));
+    assert!(names.contains(&"openai/gpt-4o-mini-tts"));
+    assert!(names.contains(&"openai/gpt-image-1"));
+}
+
+#[tokio::test]
+async fn test_ollama_show_returns_synthetic_metadata() {
+    let (state, router) = create_test_app(48282);
+    state
+        .vault
+        .add_key("openai", "test-openai-key", None)
+        .await
+        .unwrap();
+    configure_ollama_api_models(&state, "openai", &["gpt-4o"]).await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/show")
+        .header("host", "localhost:48282")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"model":"openai/gpt-4o"}).to_string(),
+        ))
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_to_string(resp).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["model_info"]["hostless.provider"], "openai");
+    assert_eq!(json["model_info"]["hostless.model_id"], "gpt-4o");
+    assert_eq!(json["details"]["format"], "api");
+}
+
+#[tokio::test]
+async fn test_ollama_ps_starts_empty_and_tracks_recent_activity() {
+    let (backend_addr, _handle) = spawn_openai_responses_backend().await;
+    let (state, router) = create_test_app(48282);
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+    configure_ollama_api_models(&state, "openai", &["gpt-4o-mini"]).await;
+
+    let initial_req = Request::builder()
+        .method("GET")
+        .uri("/api/ps")
+        .header("host", "localhost:48282")
+        .body(Body::empty())
+        .unwrap();
+
+    let initial_resp = send_request(&router, initial_req).await;
+    assert_eq!(initial_resp.status(), StatusCode::OK);
+    let initial_json: serde_json::Value = serde_json::from_str(&body_to_string(initial_resp).await).unwrap();
+    assert_eq!(initial_json["models"].as_array().unwrap().len(), 0);
+
+    let usage_req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("host", "localhost:48282")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "input": "hello"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let usage_resp = send_request(&router, usage_req).await;
+    assert_eq!(usage_resp.status(), StatusCode::OK);
+
+    let ps_req = Request::builder()
+        .method("GET")
+        .uri("/api/ps")
+        .header("host", "localhost:48282")
+        .body(Body::empty())
+        .unwrap();
+
+    let ps_resp = send_request(&router, ps_req).await;
+    assert_eq!(ps_resp.status(), StatusCode::OK);
+    let ps_json: serde_json::Value = serde_json::from_str(&body_to_string(ps_resp).await).unwrap();
+    let models = ps_json["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["name"], "openai/gpt-4o-mini");
+    assert!(models[0]["expires_at"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn test_ollama_tags_discovers_models_from_provider_api() {
+    let (backend_addr, _handle) = spawn_openai_models_backend().await;
+    let (state, router) = create_test_app(48282);
+    state
+        .vault
+        .add_key(
+            "openai",
+            "test-openai-key",
+            Some(&format!("http://127.0.0.1:{}", backend_addr.port())),
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/tags")
+        .header("host", "localhost:48282")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_to_string(resp).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let names = json["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|model| model["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"openai/gpt-4o-mini"));
+    assert!(names.contains(&"openai/gpt-image-1"));
+}
+
+#[tokio::test]
+async fn test_ollama_endpoints_reject_non_localhost_origin() {
+    let (state, router) = create_test_app(48282);
+    state
+        .vault
+        .add_key("openai", "test-openai-key", None)
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/tags")
+        .header("host", "localhost:48282")
+        .header("origin", "https://evil.example")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_subdomain_cannot_reach_ollama_compat_endpoints() {
+    let (_state, router) = create_test_app(48282);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/tags")
+        .header("host", "sneaky.localhost:48282")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = send_request(&router, req).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ Hostless is a local AI proxy and local reverse proxy.
 
 - Full localhost API reference: `docs/proxy-api.md`
 - OpenAI-compatible localhost proxy surface for chat, responses, realtime, embeddings, and media APIs
+- Supports these Ollama API endpoints on bare localhost: `GET /api/tags`, `POST /api/show`, `GET /api/ps`
 - `.localhost` reverse proxy routing for local apps with per-app origin isolation
 
 ## Status
@@ -211,6 +212,7 @@ Top-level commands are documented in `docs/cli-commands.md`.
 - `POST /auth/token` is local-only: requires admin auth, no `Origin` header, and localhost `Host` (`localhost`, `127.0.0.1`, `[::1]`).
 - Token persistence modes: `off` (default), `file`, `keychain`.
 - Detailed endpoint coverage and request contracts live in `docs/proxy-api.md`.
+- Ollama support is limited to the endpoint subset above; Hostless does not claim full Ollama runtime compatibility.
 - SSE streaming is supported; `/v1/responses` stream events are passed through without event-name rewriting.
 - WebSocket upgrade pass-through is supported for reverse-proxied local apps and `/v1/realtime` on the local API plane.
 - Full endpoint compatibility matrix (M1/M2/M3) is documented in `docs/auth-and-security.md`.
@@ -230,7 +232,7 @@ Hostless stores runtime/config files in `~/.hostless/`.
 
 ## Documentation Map
 
-- `docs/proxy-api.md`: canonical HTTP endpoint reference for `/health`, `/auth/*`, `/routes/*`, and `/v1/*`
+- `docs/proxy-api.md`: canonical HTTP endpoint reference for `/health`, `/auth/*`, `/routes/*`, `/v1/*`, and supported Ollama API endpoints
 - `docs/cli-commands.md`: canonical CLI reference
 - `docs/auth-and-security.md`: token model, auth middleware, provider routing, key storage
 - `docs/reverse-proxy.md`: host-header dispatch, reverse proxy internals, route table

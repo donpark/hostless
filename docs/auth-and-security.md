@@ -84,6 +84,33 @@ Desktop apps do not need to use the URL scheme handler unless they are intention
 - Store desktop bridge tokens in OS-backed credential stores when possible.
 - Treat `hostless token create` as an admin/bootstrap workflow. It is appropriate for trusted local apps, but it is not the same consent surface as `POST /auth/register`.
 
+### Ollama Compatibility Endpoints
+
+Hostless also supports a small subset of Ollama API endpoints on bare localhost:
+
+- `GET /api/tags`
+- `POST /api/show`
+- `GET /api/ps`
+
+This support is limited to those endpoints. It should be described as "Hostless supports these Ollama API endpoints", not as full Ollama API compatibility.
+
+These endpoints are intentionally different from `/v1/*` and `/routes*`:
+
+- they do **not** use bridge-token auth
+- they do **not** require `x-hostless-admin`
+- they are still restricted to bare localhost access semantics
+- `.localhost` subdomain traffic cannot reach them because of the same dispatch boundary used for other management-style paths
+
+Security posture:
+
+- `Host`, when present, must be bare localhost (`localhost`, `127.0.0.1`, `[::1]`)
+- `Origin` must be empty or bare localhost
+- the endpoints expose synthetic Hostless-owned metadata only; they do not reveal provider keys
+- model catalogs are sourced from upstream provider list APIs when available, with optional `~/.hostless/config.json` fallback or overrides under `ollama_api_models`
+- Google-backed models are surfaced as `gemini/...` on the Ollama-compatible endpoints, while internal provider routing still uses the `google` provider key
+
+`GET /api/ps` deserves special treatment: Hostless does not keep cloud models loaded in local memory the way Ollama does, so `/api/ps` is implemented as a recent-activity view over successful proxy usage rather than literal model residency.
+
 ## Provider Routing
 
 Model name determines the upstream provider:

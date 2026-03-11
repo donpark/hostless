@@ -37,9 +37,33 @@ pub struct AppConfig {
     /// Provider-specific base URL overrides
     #[serde(default)]
     pub provider_urls: HashMap<String, String>,
+    /// Optional model catalog overrides for the supported Ollama API endpoints.
+    #[serde(default, alias = "ollama_models")]
+    pub ollama_api_models: HashMap<String, Vec<OllamaApiModelConfig>>,
     /// Bridge token persistence policy (off/file/keychain).
     #[serde(default)]
     pub token_persistence: TokenPersistenceMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaApiModelConfig {
+    pub id: String,
+    #[serde(default)]
+    pub modified_at: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub families: Vec<String>,
+    #[serde(default)]
+    pub parameter_size: Option<String>,
+    #[serde(default)]
+    pub quantization_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +81,7 @@ impl Default for AppConfig {
             allowed_origins: Vec::new(),
             oauth_clients: HashMap::new(),
             provider_urls: HashMap::new(),
+            ollama_api_models: HashMap::new(),
             token_persistence: TokenPersistenceMode::Off,
         }
     }
