@@ -3,6 +3,7 @@ use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
+use oauth2::reqwest;
 use tracing::info;
 
 use crate::config::AppConfig;
@@ -87,14 +88,14 @@ pub async fn start_oauth_login(provider: &str) -> Result<()> {
     info!("Starting OAuth flow for '{}'", provider);
     info!("Callback listener on port {}", callback_port);
 
-    // Build OAuth client (oauth2 v4 API: new takes 4 args)
-    let client = BasicClient::new(
-        ClientId::new(client_id),
-        client_secret.map(|s| ClientSecret::new(s)),
-        AuthUrl::new(auth_url)?,
-        Some(TokenUrl::new(token_url)?),
-    )
-    .set_redirect_uri(RedirectUrl::new(redirect_uri)?);
+    let mut client = BasicClient::new(ClientId::new(client_id))
+        .set_auth_uri(AuthUrl::new(auth_url)?)
+        .set_token_uri(TokenUrl::new(token_url)?)
+        .set_redirect_uri(RedirectUrl::new(redirect_uri)?);
+
+    if let Some(client_secret) = client_secret {
+        client = client.set_client_secret(ClientSecret::new(client_secret));
+    }
 
     // Generate PKCE challenge
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -128,12 +129,16 @@ pub async fn start_oauth_login(provider: &str) -> Result<()> {
 
     info!("Received authorization code, exchanging for token...");
 
-    // Exchange code for token using oauth2's built-in async HTTP client
-    // (oauth2 v4.4 bundles its own reqwest 0.11 for this purpose)
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("Failed to build OAuth HTTP client")?;
+
+    // Exchange code for token using the workspace's reqwest client.
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(pkce_verifier)
-        .request_async(oauth2::reqwest::async_http_client)
+        .request_async(&http_client)
         .await
         .map_err(|e| anyhow::anyhow!("Token exchange failed: {}", e))?;
 

@@ -34,8 +34,8 @@ required-features = ["internal-testing"]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
-tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # HTTP client for upstream requests
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -63,7 +63,7 @@ argon2 = "0.5"
 keyring = { version = "3", features = ["apple-native", "linux-native"] }
 
 # OAuth
-oauth2 = "4"
+oauth2 = "5"
 
 # Token generation & time
 uuid = { version = "1", features = ["v4"] }
