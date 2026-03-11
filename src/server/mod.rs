@@ -189,7 +189,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 tracing::info!("Cleaned up {} stale routes", stale_routes);
                 // Revoke tokens associated with stale routes
                 for token in &revoked_tokens {
-                    cleanup_state.token_manager.revoke(token).await;
+                    if let Err(error) = cleanup_state.token_manager.revoke(token).await {
+                        tracing::warn!(error = %error, "Failed to revoke stale-route token");
+                    }
                 }
             }
         }

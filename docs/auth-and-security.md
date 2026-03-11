@@ -51,7 +51,7 @@ The recommended product-facing scheme is `authmatic:`. A temporary `hostless:` c
 Handler-facing expectations:
 
 - The handler forwards registration intent to hostless using `POST /auth/register`.
-- The handler discovers the active daemon port from `~/.hostless/hostless.port` (fallback `11434`).
+- The handler discovers the active daemon port from `~/.hostless/hostless.port` (fallback `48282`).
 - The handler preserves and returns caller `state` as-is for CSRF-style correlation.
 - Callback payload includes resolved runtime `port` and `local_url`.
 - Bridge token is returned in URL fragment (`#token=...`) and never in query string.

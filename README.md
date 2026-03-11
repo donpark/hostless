@@ -11,7 +11,7 @@ Hostless is a local AI proxy and local reverse proxy.
 
 - Keeps provider API keys out of browser/app runtime.
 - Provides origin-scoped bridge tokens (`sk_local_*`) instead of raw provider keys.
-- Lets local apps run under unique origins like `myapp.localhost:11434`.
+- Lets local apps run under unique origins like `myapp.localhost:48282`.
 
 ## What It Implements
 
@@ -47,13 +47,13 @@ make health
 Minimal test request:
 
 ```bash
-curl -X POST http://localhost:11434/v1/chat/completions \
+curl -X POST http://localhost:48282/v1/chat/completions \
   -H "Authorization: Bearer sk_local_..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 
 # OpenAI Responses API (OpenAI-compatible models)
-curl -X POST http://localhost:11434/v1/responses \
+curl -X POST http://localhost:48282/v1/responses \
   -H "Authorization: Bearer sk_local_..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","input":"hello"}'
@@ -66,7 +66,7 @@ Responses WebSocket mode through hostless:
 import WebSocket from "ws";
 
 const token = process.env.HOSTLESS_TOKEN; // sk_local_...
-const ws = new WebSocket("ws://localhost:11434/v1/responses?model=gpt-4o-mini", {
+const ws = new WebSocket("ws://localhost:48282/v1/responses?model=gpt-4o-mini", {
   headers: {
     Authorization: `Bearer ${token}`,
   },
@@ -126,7 +126,7 @@ from websocket import create_connection
 
 token = os.environ["HOSTLESS_TOKEN"]  # sk_local_...
 ws = create_connection(
-    "ws://localhost:11434/v1/responses?model=gpt-4o-mini",
+    "ws://localhost:48282/v1/responses?model=gpt-4o-mini",
     header=[f"Authorization: Bearer {token}"],
 )
 

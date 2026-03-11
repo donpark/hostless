@@ -1599,9 +1599,22 @@ pub async fn auth_revoke(
         return resp;
     }
 
-    state.token_manager.revoke(&req.token).await;
-    info!("Token revoked");
-    Json(json!({ "status": "revoked" })).into_response()
+    match state.token_manager.revoke(&req.token).await {
+        Ok(()) => {
+            info!("Token revoked");
+            Json(json!({ "status": "revoked" })).into_response()
+        }
+        Err(e) => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": {
+                    "message": format!("{}", e),
+                    "type": "authentication_error",
+                }
+            })),
+        )
+            .into_response(),
+    }
 }
 
 // ─── List Active Tokens ──────────────────────────────────
@@ -1928,8 +1941,15 @@ pub async fn deregister_route(
         Some(route) => {
             // Revoke associated token if any
             if let Some(token) = &route.token {
-                state.token_manager.revoke(token).await;
-                info!(app = route.app_name.as_str(), "Revoked associated bridge token");
+                if let Err(error) = state.token_manager.revoke(token).await {
+                    warn!(
+                        app = route.app_name.as_str(),
+                        error = %error,
+                        "Failed to revoke associated bridge token"
+                    );
+                } else {
+                    info!(app = route.app_name.as_str(), "Revoked associated bridge token");
+                }
             }
 
             Json(json!({

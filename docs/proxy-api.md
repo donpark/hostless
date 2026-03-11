@@ -19,8 +19,8 @@ Related docs:
 
 Hostless listens on bare localhost, typically:
 
-- `http://localhost:11434`
-- `http://127.0.0.1:11434`
+- `http://localhost:48282`
+- `http://127.0.0.1:48282`
 
 When TLS is enabled, the same endpoints are available on `https://localhost:<port>`.
 
@@ -89,7 +89,7 @@ The admin token is stored in `~/.hostless/admin.token`.
 Quick curl setup for localhost management endpoints:
 
 ```bash
-PORT=11434
+PORT=48282
 ADMIN_TOKEN="$(cat ~/.hostless/admin.token)"
 ```
 
@@ -147,7 +147,7 @@ Request body:
 
 ```json
 {
-  "origin": "http://myapp.localhost:11434",
+  "origin": "http://myapp.localhost:48282",
   "callback": "https://example.com/callback",
   "state": "opaque-state",
   "allowed_providers": ["openai"],
@@ -169,8 +169,8 @@ JSON response when `callback` is omitted:
 
 ```json
 {
-  "port": 11434,
-  "local_url": "http://localhost:11434",
+  "port": 48282,
+  "local_url": "http://localhost:48282",
   "token": "sk_local_...",
   "state": "opaque-state",
   "expires_in": 3600
@@ -197,7 +197,7 @@ Example request:
 curl -X POST "http://localhost:${PORT}/auth/register" \
   -H "Content-Type: application/json" \
   -d '{
-    "origin": "http://myapp.localhost:11434",
+    "origin": "http://myapp.localhost:48282",
     "allowed_providers": ["openai"],
     "allowed_models": ["gpt-4o-mini"]
   }'
@@ -285,6 +285,9 @@ Request body:
 }
 ```
 
+The `token` field may be either the full token or a unique prefix such as the
+`token_prefix` returned by `GET /auth/tokens`.
+
 Response:
 
 ```json
@@ -321,6 +324,9 @@ Request body:
 }
 ```
 
+The `token` field may be either the full token or a unique prefix such as the
+`token_prefix` returned by `GET /auth/tokens`.
+
 Response:
 
 ```json
@@ -353,7 +359,7 @@ Response shape:
   "tokens": [
     {
       "token_prefix": "sk_local_abc123...",
-      "origin": "http://myapp.localhost:11434",
+      "origin": "http://myapp.localhost:48282",
       "app_name": "myapp",
       "expires_in_secs": 3500,
       "allowed_models": ["gpt-4o-mini"],
@@ -390,7 +396,7 @@ Response shape:
       "target_port": 4173,
       "pid": 12345,
       "app_name": "myapp",
-      "url": "http://myapp.localhost:11434"
+      "url": "http://myapp.localhost:48282"
     }
   ]
 }
@@ -438,12 +444,12 @@ Response:
 ```json
 {
   "hostname": "myapp.localhost",
-  "url": "http://myapp.localhost:11434",
+  "url": "http://myapp.localhost:48282",
   "target_port": 4173,
   "pid": 12345,
   "token": {
     "token": "sk_local_...",
-    "origin": "http://myapp.localhost:11434",
+    "origin": "http://myapp.localhost:48282",
     "expires_in": 86400
   }
 }

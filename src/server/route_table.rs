@@ -325,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_and_lookup() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         let route = table.register("myapp", 4001, Some(12345)).await.unwrap();
 
         assert_eq!(route.hostname, "myapp.localhost");
@@ -338,7 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_route() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("myapp", 4001, None).await.unwrap();
 
         let removed = table.remove("myapp").await;
@@ -350,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_with_wildcard_match() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("myapp", 4001, None).await.unwrap();
 
         let found = table
@@ -362,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_with_wildcard_exact_precedence() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("myapp", 4001, None).await.unwrap();
         table.register("tenant.myapp", 4002, None).await.unwrap();
 
@@ -375,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_with_wildcard_prefers_most_specific_suffix() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("app", 4001, None).await.unwrap();
         table.register("myapp", 4002, None).await.unwrap();
 
@@ -393,7 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_by_hostname() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("myapp", 4001, None).await.unwrap();
 
         let removed = table.remove("myapp.localhost").await;
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_routes() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         table.register("app1", 4001, None).await.unwrap();
         table.register("app2", 4002, None).await.unwrap();
 
@@ -412,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_stale() {
-        let table = RouteTable::new(11434);
+        let table = RouteTable::new(48282);
         // PID 999999999 is almost certainly not alive
         table.register("dead-app", 4001, Some(999_999_999)).await.unwrap();
         table.register("no-pid", 4002, None).await.unwrap();

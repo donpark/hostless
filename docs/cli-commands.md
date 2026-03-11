@@ -11,7 +11,7 @@ Related docs:
 ## Top-level commands
 
 ```bash
-hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
+hostless serve [--port 48282] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
 hostless proxy <start|stop> ...
 hostless run [<name>] [--infer-name] [--name <name>] [--worktree-prefix] [--app-port <p>] [--daemon-port <p>] [--providers <csv>] [--models <csv>] [--rate-limit <n>] [--ttl <seconds>] [--no-token] -- <command...>
 hostless <name> <command...>
@@ -33,12 +33,12 @@ hostless token <create|list|revoke> ...
 ## serve
 
 ```bash
-hostless serve [--port 11434] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
+hostless serve [--port 48282] [--tls] [--verbose] [--dev-mode] [--daemon] [--token-persistence <off|file|keychain>]
 ```
 
 | Flag | Description |
 |---|---|
-| `--port` | Listen port (default: `11434`) |
+| `--port` | Listen port (default: `48282`) |
 | `--tls` | Enable TLS with auto-generated local certs |
 | `--verbose` | Enable verbose logging |
 | `--dev-mode` | Allow unauthenticated bare localhost/no-origin requests |
@@ -59,7 +59,7 @@ hostless <name> <command...>
 | `--name <name>` | Explicit name override |
 | `--worktree-prefix` | Prefix app name with current git worktree branch segment |
 | `--app-port <port>` | Override assigned app port (`--port` remains accepted as alias) |
-| `--daemon-port <port>` | Hostless daemon port (default: `11434`) |
+| `--daemon-port <port>` | Hostless daemon port (default: `48282`) |
 | `--providers <csv>` | Restrict token to providers (`openai,anthropic,google`) |
 | `--models <csv>` | Restrict token to model globs |
 | `--rate-limit <n>` | Requests/hour limit for auto-token |
@@ -86,7 +86,7 @@ Stops the daemon process tracked in `~/.hostless/hostless.pid`.
 ## proxy (portless-compatible)
 
 ```bash
-hostless proxy start [--port 11434] [--https] [--verbose] [--dev-mode] [--foreground] [--token-persistence <off|file|keychain>]
+hostless proxy start [--port 48282] [--https] [--verbose] [--dev-mode] [--foreground] [--token-persistence <off|file|keychain>]
 hostless proxy stop
 ```
 
@@ -106,8 +106,8 @@ Equivalent to `hostless route list`.
 
 ```bash
 hostless route list
-hostless route add <name> --port <port> [--daemon-port 11434]
-hostless route remove <name> [--daemon-port 11434]
+hostless route add <name> --port <port> [--daemon-port 48282]
+hostless route remove <name> [--daemon-port 48282]
 ```
 
 Use these commands to manage `.localhost` route mappings without process wrapping.
@@ -115,11 +115,11 @@ Use these commands to manage `.localhost` route mappings without process wrappin
 ## alias
 
 ```bash
-hostless alias list [--daemon-port 11434]
-hostless alias add <name> <port> [--daemon-port 11434]
-hostless alias remove <name> [--daemon-port 11434]
-hostless alias <name> <port> [--daemon-port 11434]
-hostless alias --remove <name> [--daemon-port 11434]
+hostless alias list [--daemon-port 48282]
+hostless alias add <name> <port> [--daemon-port 48282]
+hostless alias remove <name> [--daemon-port 48282]
+hostless alias <name> <port> [--daemon-port 48282]
+hostless alias --remove <name> [--daemon-port 48282]
 ```
 
 Static aliases are loopback-only route registrations (`127.0.0.1:<port>`) and do not auto-provision bridge tokens.
@@ -196,6 +196,7 @@ hostless token revoke <token-or-prefix>
 - `create`: Create bridge tokens for CLI/apps with optional origin/provider/model/rate/ttl scopes
 - `list`: Show active bridge tokens
 - `revoke`: Revoke by full token or prefix
+- These commands talk to the active daemon port recorded in `~/.hostless/hostless.port` and fall back to `48282` when no port file exists.
 
 ## Make targets (dev workflow)
 
@@ -204,12 +205,12 @@ The project Makefile provides common local workflows around the CLI:
 ```bash
 make build                                  # cargo build + codesign + copy ./hostless
 make release                                # cargo build --release + codesign + copy ./hostless
-make serve [PORT=11434]                     # run proxy in foreground
+make serve [PORT=48282]                     # run proxy in foreground
 make stop                                   # stop daemon tracked by ~/.hostless/hostless.pid
 make stop-all                               # stop all running hostless processes
 make test-web                               # run plain python test web server
-make test-web-wrapped WEB_PORT=4173 PORT=11434
-make test-web-status WEB_PORT=4173 PORT=11434
+make test-web-wrapped WEB_PORT=4173 PORT=48282
+make test-web-status WEB_PORT=4173 PORT=48282
 ```
 
 Notes:

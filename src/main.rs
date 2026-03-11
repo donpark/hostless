@@ -54,7 +54,7 @@ enum Commands {
     /// Start the proxy server
     Serve {
         /// Port to listen on
-        #[arg(short, long, default_value = "11434")]
+        #[arg(short, long, default_value = "48282")]
         port: u16,
 
         /// Enable TLS with auto-generated local certificates
@@ -110,7 +110,7 @@ enum Commands {
         #[arg(long = "app-port", alias = "port")]
         app_port: Option<u16>,
 
-        /// Hostless daemon port (default: auto-detect or 11434)
+        /// Hostless daemon port (default: auto-detect or 48282)
         #[arg(long)]
         daemon_port: Option<u16>,
 
@@ -172,8 +172,8 @@ enum Commands {
         /// Portless-compatible add form: hostless alias <name> <port>
         port: Option<u16>,
 
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
 
@@ -227,7 +227,7 @@ enum ProxyAction {
     /// Start the proxy daemon (portless-compatible)
     Start {
         /// Port to listen on
-        #[arg(short, long, default_value = "11434")]
+        #[arg(short, long, default_value = "48282")]
         port: u16,
 
         /// Enable TLS with auto-generated local certificates
@@ -304,16 +304,16 @@ enum RouteAction {
         /// Target port on 127.0.0.1
         #[arg(long)]
         port: u16,
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
     /// Remove a route
     Remove {
         /// App name or hostname (e.g., "myapp" or "myapp.localhost")
         name: String,
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
 }
@@ -322,8 +322,8 @@ enum RouteAction {
 enum AliasAction {
     /// List static aliases (same output as route list)
     List {
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
     /// Add a static alias to a loopback port
@@ -332,16 +332,16 @@ enum AliasAction {
         name: String,
         /// Target local port on 127.0.0.1
         port: u16,
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
     /// Remove a static alias
     Remove {
         /// Alias name or hostname
         name: String,
-        /// Hostless daemon port (default: 11434)
-        #[arg(long, default_value = "11434")]
+        /// Hostless daemon port (default: 48282)
+        #[arg(long, default_value = "48282")]
         daemon_port: u16,
     },
 }
@@ -571,7 +571,7 @@ async fn main() -> Result<()> {
         Commands::List { daemon_port } => {
             let effective_port = daemon_port
                 .or_else(process::manager::read_daemon_port)
-                .unwrap_or(11434);
+                .unwrap_or(48282);
             print_routes(effective_port).await?;
         }
 
@@ -726,7 +726,7 @@ async fn run_wrapped_command(
     // Determine daemon port (explicit --daemon-port wins; else auto-detect from file; else default)
     let effective_daemon_port = daemon_port
         .or_else(process::manager::read_daemon_port)
-        .unwrap_or(11434);
+        .unwrap_or(48282);
 
     ensure_daemon_ready_for_run(&effective_name, effective_daemon_port).await?;
 
@@ -1091,8 +1091,14 @@ fn handle_config(action: ConfigAction) -> Result<()> {
     Ok(())
 }
 
+fn active_daemon_port() -> u16 {
+    process::manager::read_daemon_port().unwrap_or(48282)
+}
+
 async fn handle_token(action: TokenAction) -> Result<()> {
     let admin_token = auth::admin::load_admin_token()?;
+    let daemon_port = active_daemon_port();
+    let proxy_url = format!("http://localhost:{}", daemon_port);
 
     match action {
         TokenAction::Create {
@@ -1106,7 +1112,6 @@ async fn handle_token(action: TokenAction) -> Result<()> {
             // We need a running server to issue tokens, so call the server's API
             // For CLI-created tokens, we talk to the running proxy
             let client = reqwest::Client::new();
-            let proxy_url = "http://localhost:11434";
 
             // Check if server is running
             match client.get(format!("{}/health", proxy_url)).send().await {
@@ -1164,7 +1169,7 @@ async fn handle_token(action: TokenAction) -> Result<()> {
         TokenAction::List => {
             let client = reqwest::Client::new();
             let resp = client
-                .get("http://localhost:11434/auth/tokens")
+                .get(format!("{}/auth/tokens", proxy_url))
                 .header(auth::admin::ADMIN_HEADER, &admin_token)
                 .send()
                 .await;
@@ -1213,7 +1218,7 @@ async fn handle_token(action: TokenAction) -> Result<()> {
         TokenAction::Revoke { token } => {
             let client = reqwest::Client::new();
             let resp = client
-                .post("http://localhost:11434/auth/revoke")
+                .post(format!("{}/auth/revoke", proxy_url))
                 .header(auth::admin::ADMIN_HEADER, &admin_token)
                 .json(&serde_json::json!({ "token": token }))
                 .send()
@@ -1243,7 +1248,7 @@ async fn handle_route(action: RouteAction) -> Result<()> {
 
     match action {
         RouteAction::List => {
-            let daemon_port = process::manager::read_daemon_port().unwrap_or(11434);
+            let daemon_port = process::manager::read_daemon_port().unwrap_or(48282);
             print_routes(daemon_port).await?;
         }
         RouteAction::Add {

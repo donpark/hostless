@@ -491,10 +491,39 @@ impl BridgeTokenManager {
         Ok(u64::MAX)
     }
 
+    fn normalize_token_identifier(identifier: &str) -> &str {
+        identifier.strip_suffix("...").unwrap_or(identifier)
+    }
+
+    async fn resolve_token_identifier(&self, identifier: &str) -> Result<String, TokenError> {
+        let normalized = Self::normalize_token_identifier(identifier.trim());
+        if normalized.is_empty() {
+            return Err(TokenError::NotFound);
+        }
+
+        let tokens = self.tokens.read().await;
+        if tokens.contains_key(normalized) {
+            return Ok(normalized.to_string());
+        }
+
+        let mut matches = tokens
+            .keys()
+            .filter(|candidate| candidate.starts_with(normalized))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        match matches.len() {
+            0 => Err(TokenError::NotFound),
+            1 => Ok(matches.swap_remove(0)),
+            _ => Err(TokenError::AmbiguousPrefix),
+        }
+    }
+
     /// Refresh a token's expiry
     pub async fn refresh(&self, token: &str, new_ttl: Duration) -> Result<(), TokenError> {
+        let resolved = self.resolve_token_identifier(token).await?;
         let mut tokens = self.tokens.write().await;
-        let bridge_token = tokens.get_mut(token).ok_or(TokenError::NotFound)?;
+        let bridge_token = tokens.get_mut(&resolved).ok_or(TokenError::NotFound)?;
 
         bridge_token.expires_at = Instant::now() + new_ttl;
         drop(tokens);
@@ -505,15 +534,17 @@ impl BridgeTokenManager {
     }
 
     /// Revoke a token
-    pub async fn revoke(&self, token: &str) {
+    pub async fn revoke(&self, token: &str) -> Result<(), TokenError> {
+        let resolved = self.resolve_token_identifier(token).await?;
         let mut tokens = self.tokens.write().await;
-        let removed = tokens.remove(token);
+        let removed = tokens.remove(&resolved);
         drop(tokens);
 
         if removed.is_some() {
             self.persist_if_enabled().await;
         }
         info!("Revoked bridge token");
+        Ok(())
     }
 
     /// Clean up expired tokens (call periodically)
@@ -538,6 +569,8 @@ impl BridgeTokenManager {
 pub enum TokenError {
     #[error("Token not found")]
     NotFound,
+    #[error("Token prefix matched multiple tokens")]
+    AmbiguousPrefix,
     #[error("Token has expired")]
     Expired,
     #[error("Origin mismatch")]
@@ -799,11 +832,57 @@ mod tests {
 
         assert!(manager.validate(&token.token, "https://myapp.com").await.is_ok());
 
-        manager.revoke(&token.token).await;
+        manager.revoke(&token.token).await.unwrap();
 
         assert!(matches!(
             manager.validate(&token.token, "https://myapp.com").await,
             Err(TokenError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_refresh_accepts_unique_token_prefix() {
+        let manager = BridgeTokenManager::new();
+        let token = manager
+            .issue("https://myapp.com", Duration::from_secs(10), None, None)
+            .await;
+
+        let prefix = format!("{}...", &token.token[..20]);
+        assert!(manager
+            .refresh(&prefix, Duration::from_secs(3600))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_accepts_unique_token_prefix() {
+        let manager = BridgeTokenManager::new();
+        let token = manager
+            .issue("https://myapp.com", Duration::from_secs(3600), None, None)
+            .await;
+
+        let prefix = format!("{}...", &token.token[..20]);
+        manager.revoke(&prefix).await.unwrap();
+
+        assert!(matches!(
+            manager.validate(&token.token, "https://myapp.com").await,
+            Err(TokenError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_revoke_rejects_ambiguous_prefix() {
+        let manager = BridgeTokenManager::new();
+        let _token_a = manager
+            .issue("https://a.com", Duration::from_secs(3600), None, None)
+            .await;
+        let _token_b = manager
+            .issue("https://b.com", Duration::from_secs(3600), None, None)
+            .await;
+
+        assert!(matches!(
+            manager.revoke("sk_local_").await,
+            Err(TokenError::AmbiguousPrefix)
         ));
     }
 

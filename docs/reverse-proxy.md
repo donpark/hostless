@@ -12,10 +12,10 @@ Related docs:
 
 ```
                          ┌─────────────────────────────────────────────────┐
-                         │                 hostless (:11434)               │
+                         │                 hostless (:48282)               │
                          │                                                 │
   Browser                │  ┌──────────────────────────────┐               │
-  myapp.localhost:11434 ─┼─►│  Host-Header Dispatch        │               │
+  myapp.localhost:48282 ─┼─►│  Host-Header Dispatch        │               │
                          │  │  (dispatch.rs)               │               │
                          │  │  *.localhost → reverse proxy  │               │
                          │  │  localhost   → fall-through   │               │
@@ -56,7 +56,7 @@ Requests to `.localhost` subdomains **structurally cannot reach**:
 - `/routes/*` — route management
 - `/health` — health check
 
-This is not a filter or access-control check — the dispatch layer routes subdomain traffic to a completely different code path. A compromised app running at `evil.localhost:11434` cannot craft requests to the management plane.
+This is not a filter or access-control check — the dispatch layer routes subdomain traffic to a completely different code path. A compromised app running at `evil.localhost:48282` cannot craft requests to the management plane.
 
 ### Key Functions
 

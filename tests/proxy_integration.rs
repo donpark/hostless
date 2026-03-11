@@ -407,11 +407,11 @@ async fn body_to_string(resp: axum::response::Response) -> String {
 /// 404 for unknown .localhost subdomain (proxy.test.ts: "returns 404 for unknown hostname")
 #[tokio::test]
 async fn test_unknown_hostname_returns_404() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "unknown.localhost:11434")
+        .header("host", "unknown.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -425,14 +425,14 @@ async fn test_unknown_hostname_returns_404() {
 /// 404 body includes registered routes (proxy.test.ts: "includes active routes in 404 page")
 #[tokio::test]
 async fn test_404_mentions_registered_routes() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     // Register a route
     state.route_table.register("myapp", 4001, None).await.unwrap();
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "other.localhost:11434")
+        .header("host", "other.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -445,7 +445,7 @@ async fn test_404_mentions_registered_routes() {
 async fn test_proxy_to_matching_route() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "hello from backend").await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("myapp", backend_addr.port(), None)
@@ -454,7 +454,7 @@ async fn test_proxy_to_matching_route() {
 
     let req = Request::builder()
         .uri("/some/path?q=1")
-        .header("host", "myapp.localhost:11434")
+        .header("host", "myapp.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -471,7 +471,7 @@ async fn test_proxy_to_matching_route() {
 async fn test_forwards_request_headers() {
     let (backend_addr, _handle) = spawn_echo_backend().await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("myapp", backend_addr.port(), None)
@@ -480,7 +480,7 @@ async fn test_forwards_request_headers() {
 
     let req = Request::builder()
         .uri("/test")
-        .header("host", "myapp.localhost:11434")
+        .header("host", "myapp.localhost:48282")
         .header("x-custom", "foobar")
         .body(Body::empty())
         .unwrap();
@@ -494,7 +494,7 @@ async fn test_forwards_request_headers() {
     // X-Forwarded-Host should be set
     assert_eq!(
         json["headers"]["x-forwarded-host"].as_str().unwrap(),
-        "myapp.localhost:11434"
+        "myapp.localhost:48282"
     );
     // X-Forwarded-Proto should be set
     assert_eq!(
@@ -511,7 +511,7 @@ async fn test_forwards_request_headers() {
 /// Dead backend returns 502 (proxy.test.ts: "returns 502 when backend is not running")
 #[tokio::test]
 async fn test_dead_backend_returns_502() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     // Register a route to a port where nothing is listening
     state
@@ -522,7 +522,7 @@ async fn test_dead_backend_returns_502() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "deadapp.localhost:11434")
+        .header("host", "deadapp.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -538,7 +538,7 @@ async fn test_dead_backend_returns_502() {
 async fn test_loop_detection_508_at_max_hops() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "ok").await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("loop", backend_addr.port(), None)
@@ -548,7 +548,7 @@ async fn test_loop_detection_508_at_max_hops() {
     // Send request with hops=5 (MAX_HOPS)
     let req = Request::builder()
         .uri("/")
-        .header("host", "loop.localhost:11434")
+        .header("host", "loop.localhost:48282")
         .header("x-hostless-hops", "5")
         .body(Body::empty())
         .unwrap();
@@ -566,7 +566,7 @@ async fn test_loop_detection_508_at_max_hops() {
 async fn test_loop_detection_allows_below_max() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "ok").await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("hop", backend_addr.port(), None)
@@ -576,7 +576,7 @@ async fn test_loop_detection_allows_below_max() {
     // hops=4 (below MAX_HOPS=5)
     let req = Request::builder()
         .uri("/")
-        .header("host", "hop.localhost:11434")
+        .header("host", "hop.localhost:48282")
         .header("x-hostless-hops", "4")
         .body(Body::empty())
         .unwrap();
@@ -591,7 +591,7 @@ async fn test_loop_detection_allows_below_max() {
 async fn test_hop_counter_increments() {
     let (backend_addr, _handle) = spawn_echo_backend().await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("counter", backend_addr.port(), None)
@@ -600,7 +600,7 @@ async fn test_hop_counter_increments() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "counter.localhost:11434")
+        .header("host", "counter.localhost:48282")
         .header("x-hostless-hops", "2")
         .body(Body::empty())
         .unwrap();
@@ -623,12 +623,12 @@ async fn test_hop_counter_increments() {
 /// can NEVER reach management endpoints.
 #[tokio::test]
 async fn test_bare_localhost_reaches_management_api() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     // Bare localhost → should reach the /health endpoint
     let req = Request::builder()
         .uri("/health")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -639,12 +639,12 @@ async fn test_bare_localhost_reaches_management_api() {
 /// Subdomain traffic cannot reach management endpoints
 #[tokio::test]
 async fn test_subdomain_cannot_reach_management() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     // Try to reach /health via a .localhost subdomain
     let req = Request::builder()
         .uri("/health")
-        .header("host", "evil.localhost:11434")
+        .header("host", "evil.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -656,12 +656,12 @@ async fn test_subdomain_cannot_reach_management() {
 /// Subdomain traffic cannot reach /auth endpoints
 #[tokio::test]
 async fn test_subdomain_cannot_reach_auth() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/auth/token")
-        .header("host", "attacker.localhost:11434")
+        .header("host", "attacker.localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(r#"{"origin":"*"}"#))
         .unwrap();
@@ -676,7 +676,7 @@ async fn test_subdomain_cannot_reach_auth() {
 async fn test_wildcard_subdomain_disabled_by_default() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "wildcard").await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("myapp", backend_addr.port(), None)
@@ -685,7 +685,7 @@ async fn test_wildcard_subdomain_disabled_by_default() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "tenant.myapp.localhost:11434")
+        .header("host", "tenant.myapp.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -698,7 +698,7 @@ async fn test_wildcard_subdomain_disabled_by_default() {
 async fn test_wildcard_subdomain_enabled_matches_parent() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "wildcard").await;
 
-    let (state, router) = create_test_app_with_wildcard(11434, true);
+    let (state, router) = create_test_app_with_wildcard(48282, true);
     state
         .route_table
         .register("myapp", backend_addr.port(), None)
@@ -707,7 +707,7 @@ async fn test_wildcard_subdomain_enabled_matches_parent() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "tenant.myapp.localhost:11434")
+        .header("host", "tenant.myapp.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -722,7 +722,7 @@ async fn test_wildcard_exact_precedence_when_enabled() {
     let (wildcard_addr, _wildcard_handle) = spawn_backend(StatusCode::OK, "wildcard").await;
     let (exact_addr, _exact_handle) = spawn_backend(StatusCode::OK, "exact").await;
 
-    let (state, router) = create_test_app_with_wildcard(11434, true);
+    let (state, router) = create_test_app_with_wildcard(48282, true);
     state
         .route_table
         .register("myapp", wildcard_addr.port(), None)
@@ -736,7 +736,7 @@ async fn test_wildcard_exact_precedence_when_enabled() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "tenant.myapp.localhost:11434")
+        .header("host", "tenant.myapp.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -748,12 +748,12 @@ async fn test_wildcard_exact_precedence_when_enabled() {
 /// Subdomain traffic cannot reach /v1 LLM proxy endpoints
 #[tokio::test]
 async fn test_subdomain_cannot_reach_llm_proxy() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
-        .header("host", "sneaky.localhost:11434")
+        .header("host", "sneaky.localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(r#"{"model":"gpt-4o","messages":[]}"#))
         .unwrap();
@@ -765,12 +765,12 @@ async fn test_subdomain_cannot_reach_llm_proxy() {
 /// Subdomain traffic cannot reach /v1/responses endpoint.
 #[tokio::test]
 async fn test_subdomain_cannot_reach_responses_proxy() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/v1/responses")
-        .header("host", "sneaky.localhost:11434")
+        .header("host", "sneaky.localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(r#"{"model":"gpt-4o-mini","input":"hello"}"#))
         .unwrap();
@@ -784,7 +784,7 @@ async fn test_subdomain_cannot_reach_responses_proxy() {
 async fn test_responses_proxy_to_openai_compatible_upstream() {
     let (backend_addr, _handle) = spawn_openai_responses_backend().await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .vault
         .add_key(
@@ -798,7 +798,7 @@ async fn test_responses_proxy_to_openai_compatible_upstream() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/responses")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -823,7 +823,7 @@ async fn test_responses_proxy_to_openai_compatible_upstream() {
 async fn test_responses_stream_passthrough_preserves_events() {
     let (backend_addr, _handle) = spawn_openai_responses_backend().await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .vault
         .add_key(
@@ -837,7 +837,7 @@ async fn test_responses_stream_passthrough_preserves_events() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/responses")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -861,12 +861,12 @@ async fn test_responses_stream_passthrough_preserves_events() {
 /// /v1/responses rejects routed non-OpenAI provider model prefixes.
 #[tokio::test]
 async fn test_responses_rejects_non_openai_provider_models() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/v1/responses")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -887,7 +887,7 @@ async fn test_responses_rejects_non_openai_provider_models() {
 #[tokio::test]
 async fn test_audio_speech_binary_passthrough() {
     let (backend_addr, _handle) = spawn_openai_media_backend().await;
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     state
         .vault
@@ -902,7 +902,7 @@ async fn test_audio_speech_binary_passthrough() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/audio/speech")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({"model":"gpt-4o-mini-tts","input":"hi","voice":"alloy"}).to_string(),
@@ -917,7 +917,7 @@ async fn test_audio_speech_binary_passthrough() {
 #[tokio::test]
 async fn test_audio_transcriptions_multipart_passthrough() {
     let (backend_addr, _handle) = spawn_openai_media_backend().await;
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     state
         .vault
@@ -938,7 +938,7 @@ async fn test_audio_transcriptions_multipart_passthrough() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/audio/transcriptions")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", format!("multipart/form-data; boundary={}", boundary))
         .body(Body::from(body))
         .unwrap();
@@ -952,7 +952,7 @@ async fn test_audio_transcriptions_multipart_passthrough() {
 #[tokio::test]
 async fn test_files_upload_multipart_passthrough() {
     let (backend_addr, _handle) = spawn_openai_media_backend().await;
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     state
         .vault
@@ -973,7 +973,7 @@ async fn test_files_upload_multipart_passthrough() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/files")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", format!("multipart/form-data; boundary={}", boundary))
         .body(Body::from(body))
         .unwrap();
@@ -987,7 +987,7 @@ async fn test_files_upload_multipart_passthrough() {
 #[tokio::test]
 async fn test_images_generations_json_passthrough() {
     let (backend_addr, _handle) = spawn_openai_media_backend().await;
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     state
         .vault
@@ -1002,7 +1002,7 @@ async fn test_images_generations_json_passthrough() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/images/generations")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::json!({"model":"gpt-image-1","prompt":"sunrise"}).to_string(),
@@ -1018,7 +1018,7 @@ async fn test_images_generations_json_passthrough() {
 #[tokio::test]
 async fn test_audio_speech_rejects_provider_scope() {
     let (backend_addr, _handle) = spawn_openai_media_backend().await;
-    let (state, router) = create_test_app_with_dev_mode(11434, false);
+    let (state, router) = create_test_app_with_dev_mode(48282, false);
 
     state
         .vault
@@ -1033,7 +1033,7 @@ async fn test_audio_speech_rejects_provider_scope() {
     let token = state
         .token_manager
         .issue_full(
-            "http://localhost:11434",
+            "http://localhost:48282",
             std::time::Duration::from_secs(3600),
             None,
             Some(vec!["anthropic".to_string()]),
@@ -1045,8 +1045,8 @@ async fn test_audio_speech_rejects_provider_scope() {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/audio/speech")
-        .header("host", "localhost:11434")
-        .header("origin", "http://localhost:11434")
+        .header("host", "localhost:48282")
+        .header("origin", "http://localhost:48282")
         .header("authorization", format!("Bearer {}", token.token))
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1061,7 +1061,7 @@ async fn test_audio_speech_rejects_provider_scope() {
 /// No Host header falls through to management API
 #[tokio::test]
 async fn test_no_host_header_falls_through() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/health")
@@ -1075,11 +1075,11 @@ async fn test_no_host_header_falls_through() {
 /// 127.0.0.1 as host falls through to management API
 #[tokio::test]
 async fn test_127_0_0_1_falls_through() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/health")
-        .header("host", "127.0.0.1:11434")
+        .header("host", "127.0.0.1:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -1090,11 +1090,11 @@ async fn test_127_0_0_1_falls_through() {
 /// Bracketed IPv6 host falls through to management API.
 #[tokio::test]
 async fn test_ipv6_host_falls_through() {
-    let (_state, router) = create_test_app(11434);
+    let (_state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/health")
-        .header("host", "[::1]:11434")
+        .header("host", "[::1]:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -1117,7 +1117,7 @@ async fn test_strips_hop_by_hop_from_response() {
     )
     .await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("hop", backend_addr.port(), None)
@@ -1126,7 +1126,7 @@ async fn test_strips_hop_by_hop_from_response() {
 
     let req = Request::builder()
         .uri("/")
-        .header("host", "hop.localhost:11434")
+        .header("host", "hop.localhost:48282")
         .body(Body::empty())
         .unwrap();
 
@@ -1150,7 +1150,7 @@ async fn test_strips_hop_by_hop_from_response() {
 async fn test_websocket_upgrade_detected() {
     let (backend_addr, _handle) = spawn_backend(StatusCode::OK, "ok").await;
 
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state
         .route_table
         .register("ws", backend_addr.port(), None)
@@ -1159,7 +1159,7 @@ async fn test_websocket_upgrade_detected() {
 
     let req = Request::builder()
         .uri("/ws")
-        .header("host", "ws.localhost:11434")
+        .header("host", "ws.localhost:48282")
         .header("connection", "Upgrade")
         .header("upgrade", "websocket")
         .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
@@ -1231,7 +1231,7 @@ async fn test_realtime_websocket_proxy_roundtrip_with_token() {
     let token = state
         .token_manager
         .issue_full(
-            "http://localhost:11434",
+            "http://localhost:48282",
             std::time::Duration::from_secs(3600),
             Some(vec!["gpt-4o-realtime*".to_string()]),
             Some(vec!["openai".to_string()]),
@@ -1252,7 +1252,7 @@ async fn test_realtime_websocket_proxy_roundtrip_with_token() {
         format!("localhost:{}", hostless_port).parse().unwrap(),
     );
     req.headers_mut()
-        .insert("Origin", "http://localhost:11434".parse().unwrap());
+        .insert("Origin", "http://localhost:48282".parse().unwrap());
     req.headers_mut().insert(
         "Authorization",
         format!("Bearer {}", token.token).parse().unwrap(),
@@ -1295,7 +1295,7 @@ async fn test_realtime_websocket_rejects_model_scope_violation() {
     let token = state
         .token_manager
         .issue_full(
-            "http://localhost:11434",
+            "http://localhost:48282",
             std::time::Duration::from_secs(3600),
             Some(vec!["gpt-4o-mini*".to_string()]),
             Some(vec!["openai".to_string()]),
@@ -1316,7 +1316,7 @@ async fn test_realtime_websocket_rejects_model_scope_violation() {
         format!("localhost:{}", hostless_port).parse().unwrap(),
     );
     req.headers_mut()
-        .insert("Origin", "http://localhost:11434".parse().unwrap());
+        .insert("Origin", "http://localhost:48282".parse().unwrap());
     req.headers_mut().insert(
         "Authorization",
         format!("Bearer {}", token.token).parse().unwrap(),
@@ -1352,7 +1352,7 @@ async fn test_responses_websocket_mode_roundtrip_with_token() {
     let token = state
         .token_manager
         .issue_full(
-            "http://localhost:11434",
+            "http://localhost:48282",
             std::time::Duration::from_secs(3600),
             None,
             Some(vec!["openai".to_string()]),
@@ -1372,7 +1372,7 @@ async fn test_responses_websocket_mode_roundtrip_with_token() {
         format!("localhost:{}", hostless_port).parse().unwrap(),
     );
     req.headers_mut()
-        .insert("Origin", "http://localhost:11434".parse().unwrap());
+        .insert("Origin", "http://localhost:48282".parse().unwrap());
     req.headers_mut().insert(
         "Authorization",
         format!("Bearer {}", token.token).parse().unwrap(),
@@ -1415,7 +1415,7 @@ async fn test_responses_websocket_mode_rejects_provider_scope() {
     let token = state
         .token_manager
         .issue_full(
-            "http://localhost:11434",
+            "http://localhost:48282",
             std::time::Duration::from_secs(3600),
             None,
             Some(vec!["anthropic".to_string()]),
@@ -1435,7 +1435,7 @@ async fn test_responses_websocket_mode_rejects_provider_scope() {
         format!("localhost:{}", hostless_port).parse().unwrap(),
     );
     req.headers_mut()
-        .insert("Origin", "http://localhost:11434".parse().unwrap());
+        .insert("Origin", "http://localhost:48282".parse().unwrap());
     req.headers_mut().insert(
         "Authorization",
         format!("Bearer {}", token.token).parse().unwrap(),
@@ -1457,12 +1457,12 @@ async fn test_responses_websocket_mode_rejects_provider_scope() {
 /// POST /routes/register creates a route and returns URL + token
 #[tokio::test]
 async fn test_register_route_api() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/routes/register")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1481,7 +1481,7 @@ async fn test_register_route_api() {
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     assert_eq!(json["hostname"].as_str().unwrap(), "myapp.localhost");
-    assert_eq!(json["url"].as_str().unwrap(), "http://myapp.localhost:11434");
+    assert_eq!(json["url"].as_str().unwrap(), "http://myapp.localhost:48282");
     assert_eq!(json["target_port"].as_u64().unwrap(), 4001);
 
     // Auto-token should be provisioned by default
@@ -1491,12 +1491,12 @@ async fn test_register_route_api() {
 /// POST /routes/register with auto_token=false skips token
 #[tokio::test]
 async fn test_register_route_no_token() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/routes/register")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1520,13 +1520,13 @@ async fn test_register_route_no_token() {
 /// POST /routes/deregister removes a route
 #[tokio::test]
 async fn test_deregister_route_api() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state.route_table.register("myapp", 4001, None).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
         .uri("/routes/deregister")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1546,12 +1546,12 @@ async fn test_deregister_route_api() {
 /// POST /routes/deregister with unknown name returns 404
 #[tokio::test]
 async fn test_deregister_unknown_route_returns_404() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/routes/deregister")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1566,13 +1566,13 @@ async fn test_deregister_unknown_route_returns_404() {
 /// GET /routes returns the route list
 #[tokio::test]
 async fn test_list_routes_api() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
     state.route_table.register("app1", 4001, None).await.unwrap();
     state.route_table.register("app2", 4002, None).await.unwrap();
 
     let req = Request::builder()
         .uri("/routes")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .body(Body::empty())
         .unwrap();
@@ -1589,11 +1589,11 @@ async fn test_list_routes_api() {
 /// GET /routes returns empty array when no routes
 #[tokio::test]
 async fn test_list_routes_empty() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/routes")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .body(Body::empty())
         .unwrap();
@@ -1610,11 +1610,11 @@ async fn test_list_routes_empty() {
 /// GET /routes rejects non-localhost Origin
 #[tokio::test]
 async fn test_list_routes_rejects_non_localhost_origin() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/routes")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("origin", "http://evil.localhost:3000")
         .body(Body::empty())
@@ -1627,11 +1627,11 @@ async fn test_list_routes_rejects_non_localhost_origin() {
 /// GET /auth/tokens rejects non-localhost Origin
 #[tokio::test]
 async fn test_auth_tokens_rejects_non_localhost_origin() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .uri("/auth/tokens")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("origin", "https://evil.example")
         .body(Body::empty())
@@ -1644,12 +1644,12 @@ async fn test_auth_tokens_rejects_non_localhost_origin() {
 /// POST /auth/revoke rejects non-localhost Origin
 #[tokio::test]
 async fn test_auth_revoke_rejects_non_localhost_origin() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/auth/revoke")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("origin", "https://evil.example")
         .header("content-type", "application/json")
@@ -1665,7 +1665,7 @@ async fn test_auth_revoke_rejects_non_localhost_origin() {
 /// POST /auth/token rejects non-localhost Host header.
 #[tokio::test]
 async fn test_auth_token_rejects_non_localhost_host() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
@@ -1685,12 +1685,12 @@ async fn test_auth_token_rejects_non_localhost_host() {
 /// Route registration with provider scope provisions a scoped token
 #[tokio::test]
 async fn test_register_route_with_provider_scope() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     let req = Request::builder()
         .method("POST")
         .uri("/routes/register")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1745,13 +1745,13 @@ async fn test_register_route_with_provider_scope() {
 /// Deregistering a route also revokes its token
 #[tokio::test]
 async fn test_deregister_revokes_token() {
-    let (state, router) = create_test_app(11434);
+    let (state, router) = create_test_app(48282);
 
     // Register
     let req = Request::builder()
         .method("POST")
         .uri("/routes/register")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1768,7 +1768,7 @@ async fn test_deregister_revokes_token() {
     assert!(
         state
             .token_manager
-            .validate(&token_str, "http://ephemeral.localhost:11434")
+            .validate(&token_str, "http://ephemeral.localhost:48282")
             .await
             .is_ok()
     );
@@ -1777,7 +1777,7 @@ async fn test_deregister_revokes_token() {
     let req = Request::builder()
         .method("POST")
         .uri("/routes/deregister")
-        .header("host", "localhost:11434")
+        .header("host", "localhost:48282")
         .header(hostless::auth::admin::ADMIN_HEADER, state.admin_token.as_str())
         .header("content-type", "application/json")
         .body(Body::from(
@@ -1790,7 +1790,7 @@ async fn test_deregister_revokes_token() {
 
     // Token should now be invalid
     assert!(
-        state.token_manager.validate(&token_str, "http://ephemeral.localhost:11434").await.is_err()
+        state.token_manager.validate(&token_str, "http://ephemeral.localhost:48282").await.is_err()
     );
 }
 
@@ -1802,7 +1802,7 @@ async fn test_deregister_revokes_token() {
 /// (routes.test.ts: "replaces existing route if PID dead")
 #[tokio::test]
 async fn test_replace_stale_route() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
 
     // Register with a dead PID
     table.register("myapp", 4001, Some(999_999_999)).await.unwrap();
@@ -1819,7 +1819,7 @@ async fn test_replace_stale_route() {
 /// (routes.test.ts: "does not replace route if PID alive")
 #[tokio::test]
 async fn test_cannot_replace_alive_route() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
 
     // Register with our own PID (definitely alive)
     table
@@ -1836,7 +1836,7 @@ async fn test_cannot_replace_alive_route() {
 /// Set and retrieve token on route
 #[tokio::test]
 async fn test_set_token_on_route() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
     table.register("myapp", 4001, None).await.unwrap();
 
     table
@@ -1851,7 +1851,7 @@ async fn test_set_token_on_route() {
 /// (routes.test.ts: "preserves routes without PID during cleanup")
 #[tokio::test]
 async fn test_cleanup_preserves_no_pid_routes() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
     table.register("no-pid", 4001, None).await.unwrap();
     table.register("alive", 4002, Some(std::process::id())).await.unwrap();
     table.register("dead", 4003, Some(999_999_999)).await.unwrap();
@@ -1871,7 +1871,7 @@ async fn test_cleanup_preserves_no_pid_routes() {
 /// Cleanup returns tokens of removed routes
 #[tokio::test]
 async fn test_cleanup_returns_removed_tokens() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
     table.register("dead-app", 4001, Some(999_999_999)).await.unwrap();
     table
         .set_token("dead-app.localhost", "sk_local_deadtoken".to_string())
@@ -1897,7 +1897,7 @@ async fn test_route_url_includes_port() {
 /// Multiple routes listed correctly
 #[tokio::test]
 async fn test_multiple_routes_listed() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
     table.register("app1", 4001, None).await.unwrap();
     table.register("app2", 4002, None).await.unwrap();
     table.register("app3", 4003, None).await.unwrap();
@@ -1914,7 +1914,7 @@ async fn test_multiple_routes_listed() {
 /// Remove by app name (not full hostname)
 #[tokio::test]
 async fn test_remove_by_app_name() {
-    let table = hostless::server::route_table::RouteTable::new(11434);
+    let table = hostless::server::route_table::RouteTable::new(48282);
     table.register("myapp", 4001, None).await.unwrap();
     table.register("other", 4002, None).await.unwrap();
 
@@ -2061,7 +2061,7 @@ fn test_child_env_has_all_vars() {
 /// Without token, HOSTLESS_TOKEN is absent
 #[test]
 fn test_child_env_no_token() {
-    let env = build_child_env(4001, None, 11434, "myapp");
+    let env = build_child_env(4001, None, 48282, "myapp");
     assert!(env.get("HOSTLESS_TOKEN").is_none());
     // But other vars should still be set
     assert_eq!(env.get("PORT").unwrap(), "4001");
@@ -2070,7 +2070,7 @@ fn test_child_env_no_token() {
 /// Inherits existing env vars
 #[test]
 fn test_child_env_inherits_system_env() {
-    let env = build_child_env(4001, None, 11434, "myapp");
+    let env = build_child_env(4001, None, 48282, "myapp");
     // PATH should be inherited (and possibly augmented)
     assert!(env.get("PATH").is_some());
 }

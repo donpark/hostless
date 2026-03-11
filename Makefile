@@ -3,7 +3,7 @@
 BIN_DEBUG := ./target/debug/hostless
 BIN_RELEASE := ./target/release/hostless
 BIN_ROOT := ./hostless
-PORT ?= 11434
+PORT ?= 48282
 WEB_PORT ?= 4173
 APP_DEV_BUNDLE := /Users/don/dev/hostless/app/build/dev-macos-arm64/hostless-app-dev.app
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
@@ -13,9 +13,9 @@ help:
 	@echo "Hostless Make targets"
 	@echo "  make build                         Build debug binary + codesign + copy to ./hostless"
 	@echo "  make release                       Build release binary + codesign + copy to ./hostless"
-	@echo "  make serve                         Start proxy on default port (11434)"
+	@echo "  make serve                         Start proxy on default port (48282)"
 	@echo "  make serve-port PORT=15055         Start proxy on custom port"
-	@echo "  make serve-dev PORT=11434          Start proxy in --dev-mode"
+	@echo "  make serve-dev PORT=48282          Start proxy in --dev-mode"
 	@echo "  make stop                          Stop daemon (if running)"
 	@echo "  make stop-all                      Stop all hostless processes"
 	@echo "  make app-scheme-register           Register @app bundle for authmatic://"
@@ -26,9 +26,9 @@ help:
 	@echo "  make keys-remove PROVIDER=openai   Remove provider key"
 	@echo "  make keys-migrate                  Migrate legacy keys.vault to keys.env"
 	@echo "  make test-web WEB_PORT=4173        Host test webapp"
-	@echo "  make test-web-wrapped WEB_PORT=4173 PORT=11434  Host test webapp via hostless run (auto-start daemon)"
-	@echo "  make test-web-status WEB_PORT=4173 PORT=11434   Show daemon/route/port status"
-	@echo "  make health PORT=11434             Curl /health"
+	@echo "  make test-web-wrapped WEB_PORT=4173 PORT=48282  Host test webapp via hostless run (auto-start daemon)"
+	@echo "  make test-web-status WEB_PORT=4173 PORT=48282   Show daemon/route/port status"
+	@echo "  make health PORT=48282             Curl /health"
 
 build:
 	cargo build

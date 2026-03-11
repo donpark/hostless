@@ -28,7 +28,7 @@ Use these as source-of-truth before editing docs or code comments:
 ## Runtime Basics
 
 - Language: Rust 2021, Axum 0.7, Tokio
-- Default port: `11434` (`--port`)
+- Default port: `48282` (`--port`)
 - Config dir: `~/.hostless/`
 
 Common files under `~/.hostless/`:
@@ -66,12 +66,12 @@ Primary logic:
 ## Architecture
 
 ```text
-Browser app (myapp.localhost:11434)
+Browser app (myapp.localhost:48282)
   -> host dispatch middleware
   -> reverse proxy path
   -> local app upstream
 
-Client app (localhost:11434/v1/*)
+Client app (localhost:48282/v1/*)
   -> auth middleware
   -> provider routing + transforms
   -> upstream provider APIs

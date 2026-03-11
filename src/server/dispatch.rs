@@ -21,7 +21,7 @@ use super::reverse_proxy;
 use super::AppState;
 
 /// Extract the hostname from the `Host` header, stripping any port.
-/// e.g., "myapp.localhost:11434" → "myapp.localhost"
+/// e.g., "myapp.localhost:48282" → "myapp.localhost"
 fn extract_hostname(req: &Request) -> Option<String> {
     req.headers()
         .get(header::HOST)
@@ -30,7 +30,7 @@ fn extract_hostname(req: &Request) -> Option<String> {
 }
 
 fn parse_host_header(host: &str) -> String {
-    // RFC 3986 bracketed IPv6 literal: [::1] or [::1]:11434
+    // RFC 3986 bracketed IPv6 literal: [::1] or [::1]:48282
     if let Some(rest) = host.strip_prefix('[') {
         if let Some(end) = rest.find(']') {
             let end_idx = end + 1;
@@ -122,13 +122,13 @@ mod tests {
     #[test]
     fn test_extract_hostname() {
         let req = Request::builder()
-            .header("host", "myapp.localhost:11434")
+            .header("host", "myapp.localhost:48282")
             .body(Body::empty())
             .unwrap();
         assert_eq!(extract_hostname(&req).unwrap(), "myapp.localhost");
 
         let req = Request::builder()
-            .header("host", "localhost:11434")
+            .header("host", "localhost:48282")
             .body(Body::empty())
             .unwrap();
         assert_eq!(extract_hostname(&req).unwrap(), "localhost");
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(extract_hostname(&req).unwrap(), "myapp.localhost");
 
         let req = Request::builder()
-            .header("host", "[::1]:11434")
+            .header("host", "[::1]:48282")
             .body(Body::empty())
             .unwrap();
         assert_eq!(extract_hostname(&req).unwrap(), "[::1]");

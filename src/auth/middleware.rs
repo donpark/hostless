@@ -125,6 +125,19 @@ pub async fn auth_middleware(
             )
                 .into_response();
         }
+        Err(TokenError::AmbiguousPrefix) => {
+            warn!(origin = origin.as_str(), "Ambiguous bridge token prefix");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": {
+                        "message": "Invalid or ambiguous bridge token",
+                        "type": "authentication_error",
+                    }
+                })),
+            )
+                .into_response();
+        }
         Err(TokenError::Expired) => {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -215,7 +228,7 @@ mod tests {
         // Should match bare localhost
         assert!(is_bare_localhost("http://localhost"));
         assert!(is_bare_localhost("http://localhost:3000"));
-        assert!(is_bare_localhost("http://localhost:11434"));
+        assert!(is_bare_localhost("http://localhost:48282"));
         assert!(is_bare_localhost("https://localhost:443"));
         assert!(is_bare_localhost("http://127.0.0.1"));
         assert!(is_bare_localhost("http://127.0.0.1:8080"));

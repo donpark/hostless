@@ -15,7 +15,7 @@ $ hostless run myapp -- npm run dev
 
   1. Find available port (4000-4999)
   2. Register route: myapp.localhost → 127.0.0.1:4XXX
-  3. Auto-provision bridge token scoped to http://myapp.localhost:11434
+  3. Auto-provision bridge token scoped to http://myapp.localhost:48282
   4. Inject PORT, HOST, HOSTLESS_TOKEN, HOSTLESS_URL env vars
   5. Inject framework flags (--port, --host for vite/next/etc.)
   6. Spawn child directly when possible (shell fallback only for shell syntax)
@@ -34,7 +34,7 @@ $ hostless run myapp -- npm run dev
 | `name` | `String` | optional | App name (becomes `<name>.localhost`) |
 | `command` | `String` | required | Command to execute (direct spawn preferred; shell fallback for shell syntax) |
 | `port` | `Option<u16>` | random 4000-4999 | Override target port (`--app-port` / `HOSTLESS_APP_PORT`) |
-| `daemon_port` | `u16` | 11434 | Hostless server port |
+| `daemon_port` | `u16` | 48282 | Hostless server port |
 | `auto_token` | `bool` | true | Whether to provision a bridge token |
 | `allowed_providers` | `Option<Vec<String>>` | None (all) | Provider scope for token |
 | `allowed_models` | `Option<Vec<String>>` | None (all) | Model scope for token |

@@ -529,3 +529,87 @@ async fn test_proxy_start_cli_override_beats_config_default() {
     let _ = run_cli(&bin, &home, &["proxy", "stop"]).await;
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[tokio::test]
+async fn test_token_cli_uses_active_daemon_port() {
+    let bin = resolve_hostless_bin();
+    let home = create_temp_home_dir();
+    let daemon_port = find_available_port().unwrap();
+
+    let start = run_cli(
+        &bin,
+        &home,
+        &["proxy", "start", "--port", &daemon_port.to_string()],
+    )
+    .await;
+    assert!(
+        start.status.success(),
+        "proxy start failed: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    wait_for_health(daemon_port).await;
+
+    let create = run_cli(
+        &bin,
+        &home,
+        &["token", "create", "--name", "cli-port-check", "--ttl", "3600"],
+    )
+    .await;
+    assert!(
+        create.status.success(),
+        "token create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let create_stdout = String::from_utf8_lossy(&create.stdout);
+    let token_line = create_stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("Token:"))
+        .expect("token output should include Token line");
+    let token = token_line
+        .split_once(':')
+        .map(|(_, value)| value.trim().to_string())
+        .expect("Token line should contain ':'");
+    assert!(token.starts_with("sk_local_"));
+
+    let list = run_cli(&bin, &home, &["token", "list"]).await;
+    assert!(
+        list.status.success(),
+        "token list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&list.stdout),
+        String::from_utf8_lossy(&list.stderr)
+    );
+
+    let list_stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list_stdout.contains("cli-port-check"),
+        "token list output should include created token name\nstdout:\n{}",
+        list_stdout
+    );
+
+    let revoke = run_cli(&bin, &home, &["token", "revoke", &token]).await;
+    assert!(
+        revoke.status.success(),
+        "token revoke failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&revoke.stdout),
+        String::from_utf8_lossy(&revoke.stderr)
+    );
+
+    let list_after_revoke = run_cli(&bin, &home, &["token", "list"]).await;
+    assert!(
+        list_after_revoke.status.success(),
+        "token list after revoke failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&list_after_revoke.stdout),
+        String::from_utf8_lossy(&list_after_revoke.stderr)
+    );
+    let list_after_revoke_stdout = String::from_utf8_lossy(&list_after_revoke.stdout);
+    assert!(
+        !list_after_revoke_stdout.contains("cli-port-check"),
+        "revoked token should no longer appear in token list\nstdout:\n{}",
+        list_after_revoke_stdout
+    );
+
+    let _ = run_cli(&bin, &home, &["proxy", "stop"]).await;
+    let _ = std::fs::remove_dir_all(&home);
+}

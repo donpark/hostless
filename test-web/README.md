@@ -45,10 +45,10 @@ http://localhost:4173/?port=<p>&local_url=http%3A%2F%2Flocalhost%3A<p>&state=...
 Run wrapped route flow:
 
 ```bash
-make test-web-wrapped WEB_PORT=4173 PORT=11434
+make test-web-wrapped WEB_PORT=4173 PORT=48282
 ```
 
-Open `http://test-web.localhost:11434`.
+Open `http://test-web.localhost:48282`.
 
 The route is proxied through hostless and the page diagnostics should show `wrapped-localhost` mode.
 You can still use **Connect with Hostless** to mint a browser token for chat requests.
@@ -56,7 +56,7 @@ You can still use **Connect with Hostless** to mint a browser token for chat req
 ## Useful commands
 
 ```bash
-make test-web-status WEB_PORT=4173 PORT=11434
+make test-web-status WEB_PORT=4173 PORT=48282
 make stop
 make stop-all
 ```

@@ -63,12 +63,12 @@ The proxy integration tests use `tower::ServiceExt::oneshot` to send requests di
 ```rust
 use tower::ServiceExt;
 
-let (state, router) = create_test_app(11434);
+let (state, router) = create_test_app(48282);
 state.route_table.register("myapp", backend_port, None).await.unwrap();
 
 let req = Request::builder()
     .uri("/path")
-    .header("host", "myapp.localhost:11434")
+    .header("host", "myapp.localhost:48282")
     .body(Body::empty())
     .unwrap();
 
@@ -246,7 +246,7 @@ Add to `tests/auth_integration.rs`.
 ### Working with the Route Table in Tests
 
 ```rust
-let state = hostless::server::AppState::new_ephemeral(11434, true);
+let state = hostless::server::AppState::new_ephemeral(48282, true);
 state.route_table.register("myapp", 4001, None).await.unwrap();
 let route = state.route_table.lookup("myapp.localhost").await.unwrap();
 assert_eq!(route.target_port, 4001);

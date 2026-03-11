@@ -157,11 +157,11 @@ export function Sidebar() {
 
 ## Local `.localhost` Flow
 
-When the app is already loaded from a hostless-managed URL such as `http://myapp.localhost:11434`, the browser can derive the management API base from the current runtime:
+When the app is already loaded from a hostless-managed URL such as `http://myapp.localhost:48282`, the browser can derive the management API base from the current runtime:
 
-- current page origin: `http://myapp.localhost:11434`
-- hostless API base: `http://localhost:11434`
-- registration endpoint: `http://localhost:11434/auth/register`
+- current page origin: `http://myapp.localhost:48282`
+- hostless API base: `http://localhost:48282`
+- registration endpoint: `http://localhost:48282/auth/register`
 
 The browser should not call `/auth/register` on the subdomain host. `.localhost` traffic is the reverse-proxy plane, not the management plane.
 
@@ -192,7 +192,7 @@ Both can connect to Hostless, but they do not use the same bootstrap path.
 
 If the desktop app uses a webview frontend and that frontend can present a stable runtime origin, it can use the same direct registration contract as other local browser clients:
 
-1. discover the active daemon port from `~/.hostless/hostless.port` or fall back to `11434`
+1. discover the active daemon port from `~/.hostless/hostless.port` or fall back to `48282`
 2. call `POST http://localhost:<port>/auth/register`
 3. persist the returned bridge token and `local_url` in native app storage
 4. send `Authorization: Bearer sk_local_...` on subsequent `/v1/*` requests
@@ -246,7 +246,7 @@ Example response summary:
 After provisioning, the native app can call Hostless directly:
 
 ```http
-POST http://localhost:11434/v1/chat/completions
+POST http://localhost:48282/v1/chat/completions
 Authorization: Bearer sk_local_...
 Content-Type: application/json
 
@@ -274,7 +274,7 @@ Operational notes:
 ## Security Notes
 
 - Browser apps only receive bridge tokens (`sk_local_*`), never provider API keys.
-- Tokens are origin-bound. A token minted for `http://myapp.localhost:11434` will not work for another origin.
+- Tokens are origin-bound. A token minted for `http://myapp.localhost:48282` will not work for another origin.
 - Remote callback delivery uses the URL fragment so the token stays out of normal query logs.
 - `.localhost` subdomains are the origin isolation boundary. All apps share the hostless daemon port and are distinguished by subdomain.
 - Webview desktop apps should keep registration and request origin behavior consistent; changing renderer origin after registration will invalidate the token.

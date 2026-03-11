@@ -30,7 +30,7 @@ pub struct SpawnConfig {
     pub command: String,
     /// Target port for the app. If None, a random port 4000-4999 is assigned.
     pub port: Option<u16>,
-    /// The hostless daemon's port (default 11434)
+    /// The hostless daemon's port (default 48282)
     pub daemon_port: u16,
     /// Whether to auto-provision a bridge token
     pub auto_token: bool,
@@ -881,17 +881,17 @@ mod tests {
 
     #[test]
     fn test_build_child_env() {
-        let env = build_child_env(4001, Some("sk_local_test"), 11434, "myapp");
+        let env = build_child_env(4001, Some("sk_local_test"), 48282, "myapp");
         assert_eq!(env.get("PORT").unwrap(), "4001");
         assert_eq!(env.get("HOST").unwrap(), "127.0.0.1");
         assert_eq!(env.get("HOSTLESS_TOKEN").unwrap(), "sk_local_test");
         assert_eq!(
             env.get("HOSTLESS_URL").unwrap(),
-            "http://myapp.localhost:11434"
+            "http://myapp.localhost:48282"
         );
         assert_eq!(
             env.get("HOSTLESS_API").unwrap(),
-            "http://localhost:11434"
+            "http://localhost:48282"
         );
         assert_eq!(
             env.get("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS").unwrap(),
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_build_child_env_no_token() {
-        let env = build_child_env(4001, None, 11434, "myapp");
+        let env = build_child_env(4001, None, 48282, "myapp");
         assert!(env.get("HOSTLESS_TOKEN").is_none());
     }
 
